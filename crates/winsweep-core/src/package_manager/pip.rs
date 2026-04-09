@@ -69,7 +69,7 @@ impl PipManager {
 
     /// Get pip cache directory
     pub async fn get_cache_path(&self) -> Result<PathBuf> {
-        let pip_path = self.get_pip_path()?;
+        let pip_path = self.get_pip_path().await?;
 
         let output = Command::new(pip_path).args(["cache", "dir"]).output().await;
 
@@ -107,7 +107,7 @@ impl PipManager {
 
     /// Get all pip environment paths
     pub async fn get_env_paths(&self) -> Result<Vec<PathBuf>> {
-        let pip_path = self.get_pip_path()?;
+        let pip_path = self.get_pip_path().await?;
 
         let output = Command::new(pip_path).args(["list", "-v"]).output().await;
 
@@ -179,7 +179,7 @@ impl PackageManager for PipManager {
     }
 
     async fn get_version(&self) -> Result<String> {
-        let pip_path = self.get_pip_path()?;
+        let pip_path = self.get_pip_path().await?;
 
         let output = Command::new(pip_path).arg("--version").output().await;
 

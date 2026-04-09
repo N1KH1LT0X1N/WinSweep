@@ -419,7 +419,7 @@ fn calculate_confidence(path: &Path, signature: &ProjectSignature) -> f32 {
     // Add base confidence
     confidence += signature.confidence * 0.3;
 
-    confidence.max(0.0).min(1.0)
+    confidence.clamp(0.0, 1.0)
 }
 
 /// Check if a path matches a glob pattern

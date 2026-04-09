@@ -36,7 +36,8 @@ impl NpmManager {
         if let Some(ref npm_path) = self.npm_path {
             let output = Command::new(npm_path)
                 .args(["config", "get", "cache"])
-                .output();
+                .output()
+                .await;
 
             match output {
                 Ok(result) if result.status.success() => {
@@ -71,7 +72,8 @@ impl NpmManager {
         if let Some(ref npm_path) = self.npm_path {
             let output = Command::new(npm_path)
                 .args(["config", "get", "prefix"])
-                .output();
+                .output()
+                .await;
 
             match output {
                 Ok(result) if result.status.success() => {
@@ -127,7 +129,7 @@ impl PackageManager for NpmManager {
 
     async fn get_version(&self) -> Result<Option<String>> {
         if let Some(ref npm_path) = self.npm_path {
-            let output = Command::new(npm_path).arg("--version").output();
+            let output = Command::new(npm_path).arg("--version").output().await;
 
             match output {
                 Ok(result) if result.status.success() => {
@@ -139,7 +141,7 @@ impl PackageManager for NpmManager {
         } else {
             // Try to find npm and get version
             if let Ok(npm_path) = which("npm.cmd").or_else(|_| which("npm")) {
-                let output = Command::new(npm_path).arg("--version").output();
+                let output = Command::new(npm_path).arg("--version").output().await;
 
                 match output {
                     Ok(result) if result.status.success() => {
@@ -204,7 +206,8 @@ impl PackageManager for NpmManager {
 
             let output = Command::new(npm_path)
                 .args(["cache", "clean", "--force"])
-                .output();
+                .output()
+                .await;
 
             match output {
                 Ok(result) => {
@@ -335,6 +338,9 @@ impl PackageManager for NpmManager {
 
 impl Default for NpmManager {
     fn default() -> Self {
-        Self::new()
+        Self {
+            npm_path: None,
+            cache_path: None,
+        }
     }
 }
