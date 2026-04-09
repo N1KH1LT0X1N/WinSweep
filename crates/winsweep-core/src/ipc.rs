@@ -61,7 +61,7 @@ impl IpcServer {
             .context("Failed to create named pipe with security")?;
 
         // Convert to tokio NamedPipeServer
-        let server = NamedPipeServer::from_raw_handle(pipe_handle);
+        let server = NamedPipeServer::from_raw_handle(pipe_handle.0);
 
         let (tx, rx) = mpsc::unbounded_channel();
         let receiver = Arc::new(Mutex::new(rx));
