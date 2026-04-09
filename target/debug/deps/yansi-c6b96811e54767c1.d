@@ -1,0 +1,14 @@
+C:\Dev\WinSweep\target\debug\deps\yansi-c6b96811e54767c1.d: C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\lib.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\macros.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\windows.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\attr_quirk.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\style.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\color.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\paint.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\global.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\condition.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\set.rs
+
+C:\Dev\WinSweep\target\debug\deps\libyansi-c6b96811e54767c1.rmeta: C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\lib.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\macros.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\windows.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\attr_quirk.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\style.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\color.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\paint.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\global.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\condition.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\set.rs
+
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\lib.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\macros.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\windows.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\attr_quirk.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\style.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\color.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\paint.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\global.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\condition.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yansi-1.0.1\src\set.rs:

@@ -1,0 +1,169 @@
+name: WinSweep CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+        
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+      
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      
+    - name: Run tests
+      run: cargo test --all-features --workspace
+      
+    - name: Run integration tests
+      run: cargo test --test integration_tests --all-features
+
+  build:
+    name: Build Binaries
+    runs-on: windows-latest
+    needs: test
+    
+    strategy:
+      matrix:
+        target:
+          - winsweep-cli
+          - winsweep-gui
+          
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Build release binary
+      run: cargo build --release -p ${{ matrix.target }}
+      
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.target }}-windows
+        path: target/release/${{ matrix.target }}.exe
+
+  package:
+    name: Create Release Package
+    runs-on: windows-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: Create package
+      run: |
+        $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+        $distDir = "dist\winsweep-$version"
+        New-Item -ItemType Directory -Path $distDir -Force
+        
+        # Copy binaries
+        Copy-Item artifacts\winsweep-cli-windows\winsweep-cli.exe $distDir\
+        Copy-Item artifacts\winsweep-gui-windows\winsweep-gui.exe $distDir\
+        
+        # Copy documentation
+        Copy-Item README.md $distDir\
+        Copy-Item LICENSE $distDir\ -ErrorAction SilentlyContinue
+        if (Test-Path docs) {
+          Copy-Item docs\* $distDir\docs\ -Recurse -ErrorAction SilentlyContinue
+        }
+        
+        # Create ZIP
+        Compress-Archive -Path $distDir\* -DestinationPath "winsweep-$version-windows-x64.zip"
+        
+        # Create checksum
+        Get-FileHash -Path "winsweep-$version-windows-x64.zip" -Algorithm SHA256 | Out-File "winsweep-$version-windows-x64.zip.sha256"
+      shell: powershell
+      
+    - name: Upload package
+      uses: actions/upload-artifact@v4
+      with:
+        name: winsweep-windows-package
+        path: |
+          winsweep-*-windows-x64.zip
+          winsweep-*-windows-x64.zip.sha256
+
+  security:
+    name: Security Audit
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+      
+    - name: Run security audit
+      run: cargo audit
+      
+    - name: Check for outdated dependencies
+      run: cargo install cargo-outdated && cargo outdated
+
+  docs:
+    name: Documentation
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Generate documentation
+      run: cargo doc --all-features --no-deps
+      
+    - name: Deploy to GitHub Pages
+      if: github.ref == 'refs/heads/main'
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: target/doc
