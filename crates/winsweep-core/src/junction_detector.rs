@@ -13,10 +13,10 @@ use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK,
 };
-use windows::Win32::System::IO::{
-    DeviceIoControl, FSCTL_GET_REPARSE_POINT, IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK,
-    REPARSE_DATA_BUFFER,
+use windows::Win32::System::Ioctl::{
+    DeviceIoControl, FSCTL_GET_REPARSE_POINT, REPARSE_DATA_BUFFER,
 };
 
 /// Detector for distinguishing between junctions and symlinks

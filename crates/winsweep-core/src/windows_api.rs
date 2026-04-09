@@ -10,9 +10,9 @@ use std::ptr;
 use tracing::{error, warn};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{GetLastError, BOOL, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
-use windows::Win32::Security::{
-    GetNamedSecurityInfoW, SecurityDescriptor, SetNamedSecurityInfoW, Sid, ACE, ACL,
-    DACL_SECURITY_INFORMATION, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR_REVISION, SE_FILE_OBJECT,
+use windows::Win32::Security::{SECURITY_ATTRIBUTES};
+use windows::Win32::Security::Authorization::{
+    GetNamedSecurityInfoW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION, SE_FILE_OBJECT,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetDiskFreeSpaceExW, GetFileAttributesW, GetFinalPathNameByHandleW,
@@ -26,7 +26,7 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_SZ,
 };
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
-use windows::Win32::System::IO::{DeviceIoControl, FSCTL_GET_REPARSE_POINT, REPARSE_DATA_BUFFER};
+use windows::Win32::System::Ioctl::{DeviceIoControl, FSCTL_GET_REPARSE_POINT, REPARSE_DATA_BUFFER};
 
 /// Safe wrapper for Windows API operations
 pub struct WindowsApi;

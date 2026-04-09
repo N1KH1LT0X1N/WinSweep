@@ -17,13 +17,13 @@ use tokio::net::windows::named_pipe::{
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::GetLastError;
+use windows::core::{PCWSTR, HRESULT};
+use windows::Win32::Foundation::{GetLastError, LocalFree};
 use windows::Win32::Security::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SECURITY_ATTRIBUTES,
-    SECURITY_DESCRIPTOR,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
 };
-use windows::Win32::System::Pipes::{
+const SDDL_REVISION_1: u32 = 1;
+use windows::Win32::Storage::FileSystem::{
     CreateNamedPipeW, CreatePipe, PIPE_ACCEPT_REMOTE_CLIENTS, PIPE_ACCESS_DUPLEX,
     PIPE_READMODE_MESSAGE, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };

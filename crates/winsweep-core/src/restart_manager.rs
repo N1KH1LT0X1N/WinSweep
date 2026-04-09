@@ -10,12 +10,12 @@ use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
-use windows::core::{GUID, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, HANDLE, HRESULT};
+use windows::core::{GUID, HRESULT, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, HANDLE};
 use windows::Win32::System::RestartManager::{
     RmEndSession, RmGetList, RmRegisterResources, RmRestart, RmShutdown, RmStartSession,
     CCH_RM_MAX_APP_NAME, CCH_RM_MAX_SVC_NAME, CCH_RM_SESSION_KEY, RM_APP_STATUS, RM_APP_TYPE,
-    RM_REBOOT_REASON, RM_SESSION_KEY, RM_SHUTDOWN_TYPE, RM_START_PHASE,
+    RM_REBOOT_REASON, RM_SHUTDOWN_TYPE,
 };
 
 /// Restart Manager for handling file locks and application restarts
