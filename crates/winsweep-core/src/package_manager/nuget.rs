@@ -161,34 +161,34 @@ impl PackageManager for NugetManager {
         false
     }
 
-    async fn get_version(&self) -> Result<Option<String>> {
-        // Try nuget.exe --version
-        if let Some(ref nuget_path) = self.nuget_path {
-            let output = Command::new(nuget_path).arg("--version").output();
+    async fn get_version(&self) -> Result<String> {
+        // Try nuget.exe first
+        if let Ok(nuget_path) = which("nuget.exe") {
+            let output = Command::new(nuget_path).arg("-Version").output().await;
 
             match output {
                 Ok(result) if result.status.success() => {
                     let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    return Ok(Some(version));
+                    return Ok(version);
                 }
                 _ => {}
             }
         }
 
         // Try dotnet --version
-        if which("dotnet.exe").is_ok() || which("dotnet").is_ok() {
-            let output = Command::new("dotnet").arg("--version").output();
+        if which("dotnet.exe").is_ok() {
+            let output = Command::new("dotnet").arg("--version").output().await;
 
             match output {
                 Ok(result) if result.status.success() => {
                     let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    return Ok(Some(format!("dotnet {}", version)));
+                    return Ok(format!("dotnet {}", version));
                 }
                 _ => {}
             }
         }
 
-        Ok(None)
+        Err(anyhow::anyhow!("Failed to get NuGet version"))
     }
 
     async fn get_cache_paths(&self) -> Result<Vec<PathBuf>> {
@@ -222,34 +222,39 @@ impl PackageManager for NugetManager {
         let mut items_deleted = 0u64;
         let mut errors = Vec::new();
 
-        info!("Cleaning NuGet caches");
+        info!("Cleaning nuget caches");
 
-        // Use dotnet nuget locals --clear if available
-        if which("dotnet.exe").is_ok() || which("dotnet").is_ok() {
-            debug!("Using dotnet nuget locals command");
+        // Clean different cache types
+        let cache_types = [
+            "all",
+            "http-cache",
+            "global-packages",
+            "temp",
+            "plugins-cache",
+        ];
 
-            let cache_types = ["all", "http-cache", "packages", "temp"];
+        for cache_type in &cache_types {
+            debug!("Cleaning nuget {} cache", cache_type);
 
-            for cache_type in &cache_types {
-                let output = Command::new("dotnet")
-                    .args(["nuget", "locals", cache_type, "--clear"])
-                    .output();
+            let output = Command::new("dotnet")
+                .args(["nuget", "locals", cache_type, "--clear"])
+                .output()
+                .await;
 
-                match output {
-                    Ok(result) => {
-                        if result.status.success() {
-                            debug!("Cleared NuGet {} cache", cache_type);
-                        } else {
-                            warn!(
-                                "Failed to clear NuGet {} cache: {}",
-                                cache_type,
-                                String::from_utf8_lossy(&result.stderr)
-                            );
-                        }
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        debug!("Cleared NuGet {} cache", cache_type);
+                    } else {
+                        warn!(
+                            "Failed to clear NuGet {} cache: {}",
+                            cache_type,
+                            String::from_utf8_lossy(&result.stderr)
+                        );
                     }
-                    Err(e) => {
-                        warn!("Failed to run dotnet nuget locals: {}", e);
-                    }
+                }
+                Err(e) => {
+                    warn!("Failed to run dotnet nuget locals: {}", e);
                 }
             }
         }
@@ -383,6 +388,6 @@ impl PackageManager for NugetManager {
 
 impl Default for NugetManager {
     fn default() -> Self {
-        Self::new()
+        Self { nuget_path: None }
     }
 }

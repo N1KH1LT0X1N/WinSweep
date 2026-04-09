@@ -95,35 +95,21 @@ impl PackageManager for CargoManager {
 
     async fn is_installed(&self) -> bool {
         // Check if cargo is in PATH
-        which("cargo.exe").is_ok() || which("cargo").is_ok()
+        which("cargo.exe").is_ok()
     }
 
-    async fn get_version(&self) -> Result<Option<String>> {
-        if let Some(ref cargo_path) = self.cargo_path {
-            let output = Command::new(cargo_path).arg("--version").output();
+    /// Get cargo version
+    pub async fn get_version(&self) -> Result<String> {
+        let cargo_path = self.get_cargo_path()?;
 
-            match output {
-                Ok(result) if result.status.success() => {
-                    let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    Ok(Some(version))
-                }
-                _ => Ok(None),
-            }
-        } else {
-            // Try to find cargo and get version
-            if let Ok(cargo_path) = which("cargo.exe").or_else(|_| which("cargo")) {
-                let output = Command::new(cargo_path).arg("--version").output();
+        let output = Command::new(cargo_path).arg("--version").output().await;
 
-                match output {
-                    Ok(result) if result.status.success() => {
-                        let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                        Ok(Some(version))
-                    }
-                    _ => Ok(None),
-                }
-            } else {
-                Ok(None)
+        match output {
+            Ok(result) if result.status.success() => {
+                let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                Ok(version)
             }
+            _ => Err(anyhow::anyhow!("Failed to get cargo version")),
         }
     }
 
@@ -155,41 +141,41 @@ impl PackageManager for CargoManager {
         Ok(total_size)
     }
 
-    async fn clean_all_caches(&self) -> Result<PackageCleanResult> {
+    /// Clean all cargo caches
+    pub async fn clean_all_caches(&self) -> Result<PackageCleanResult> {
         let start_time = std::time::Instant::now();
         let mut space_freed = 0u64;
         let mut items_deleted = 0u64;
         let mut errors = Vec::new();
 
-        info!("Cleaning Cargo caches");
+        info!("Cleaning cargo caches");
 
-        // Use cargo clean if in a project
-        if let Ok(current_dir) = std::env::current_dir() {
-            let cargo_toml = current_dir.join("Cargo.toml");
-            if cargo_toml.exists() {
-                debug!("Running cargo clean in project");
+        // Get current directory to restore later
+        let current_dir = std::env::current_dir()?;
 
-                if let Some(ref cargo_path) = self.cargo_path {
-                    let output = Command::new(cargo_path)
-                        .args(["clean"])
-                        .current_dir(&current_dir)
-                        .output();
+        // Use cargo clean if cargo_home is set
+        if let Some(ref cargo_home) = self.cargo_home {
+            let cargo_path = self.get_cargo_path()?;
 
-                    match output {
-                        Ok(result) => {
-                            if result.status.success() {
-                                debug!("cargo clean completed successfully");
-                            } else {
-                                warn!(
-                                    "cargo clean failed: {}",
-                                    String::from_utf8_lossy(&result.stderr)
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to run cargo clean: {}", e);
-                        }
+            let output = Command::new(cargo_path)
+                .args(["clean"])
+                .current_dir(&current_dir)
+                .output()
+                .await;
+
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        debug!("cargo clean completed successfully");
+                    } else {
+                        warn!(
+                            "cargo clean failed: {}",
+                            String::from_utf8_lossy(&result.stderr)
+                        );
                     }
+                }
+                Err(e) => {
+                    warn!("Failed to run cargo clean: {}", e);
                 }
             }
         }
@@ -316,6 +302,9 @@ impl PackageManager for CargoManager {
 
 impl Default for CargoManager {
     fn default() -> Self {
-        Self::new()
+        Self {
+            cargo_path: None,
+            cargo_home: None,
+        }
     }
 }

@@ -26,25 +26,61 @@ impl PipManager {
         })
     }
 
-    /// Get pip cache path
-    async fn get_cache_path(&self) -> Result<PathBuf> {
-        if let Some(ref cache) = self.cache_path {
-            return Ok(cache.clone());
+    /// Get pip executable path
+    async fn get_pip_path(&self) -> Result<PathBuf> {
+        if let Some(ref pip_path) = self.pip_path {
+            return Ok(pip_path.clone());
         }
 
-        // Try pip cache dir command
-        if let Some(ref pip_path) = self.pip_path {
-            let output = Command::new(pip_path).args(["cache", "dir"]).output();
+        // Check for pip3 first, then pip
+        if which("pip3.exe").is_ok() || which("pip3").is_ok() {
+            return Ok(PathBuf::from("pip3"));
+        }
+
+        if which("pip.exe").is_ok() || which("pip").is_ok() {
+            return Ok(PathBuf::from("pip"));
+        }
+
+        // Check python -m pip
+        if which("python.exe").is_ok() || which("python3.exe").is_ok() {
+            let python_cmd = if which("python3.exe").is_ok() {
+                "python3"
+            } else {
+                "python"
+            };
+
+            let output = Command::new(python_cmd)
+                .args(["-m", "pip", "--version"])
+                .output()
+                .await;
 
             match output {
                 Ok(result) if result.status.success() => {
-                    let path_str = String::from_utf8_lossy(&result.stdout).trim();
-                    let path = PathBuf::from(path_str);
-                    return Ok(path);
+                    return Ok(PathBuf::from(python_cmd));
                 }
-                _ => {
-                    debug!("Failed to get pip cache path from command");
-                }
+                _ => {}
+            }
+        }
+
+        dirs::cache_dir()
+            .map(|d| d.join("pip"))
+            .context("Could not determine pip executable path")
+    }
+
+    /// Get pip cache directory
+    pub async fn get_cache_path(&self) -> Result<PathBuf> {
+        let pip_path = self.get_pip_path()?;
+
+        let output = Command::new(pip_path).args(["cache", "dir"]).output().await;
+
+        match output {
+            Ok(result) if result.status.success() => {
+                let path_str = String::from_utf8_lossy(&result.stdout).trim();
+                let path = PathBuf::from(path_str);
+                return Ok(path);
+            }
+            _ => {
+                debug!("Failed to get pip cache path from command");
             }
         }
 
@@ -69,28 +105,24 @@ impl PipManager {
             .context("Could not determine pip cache directory")
     }
 
-    /// Get pip environment paths
-    async fn get_env_paths(&self) -> Result<Vec<PathBuf>> {
-        let mut paths = Vec::new();
+    /// Get all pip environment paths
+    pub async fn get_env_paths(&self) -> Result<Vec<PathBuf>> {
+        let pip_path = self.get_pip_path()?;
 
-        // Get pip list to find installed packages
-        if let Some(ref pip_path) = self.pip_path {
-            let output = Command::new(pip_path)
-                .args(["list", "--format=freeze"])
-                .output();
+        let output = Command::new(pip_path).args(["list", "-v"]).output().await;
 
-            match output {
-                Ok(result) if result.status.success() => {
-                    // Parse pip list output to find package locations
-                    let _list_output = String::from_utf8_lossy(&result.stdout);
-                    // In a real implementation, we'd parse this to find package locations
-                }
-                _ => {}
+        match output {
+            Ok(result) if result.status.success() => {
+                // Parse pip list output to find package locations
+                let _list_output = String::from_utf8_lossy(&result.stdout);
+                // In a real implementation, we'd parse this to find package locations
             }
+            _ => {}
         }
 
         // Common pip environment locations
         if let Some(home_dir) = dirs::home_dir() {
+            let mut paths = Vec::new();
             paths.push(home_dir.join("AppData").join("Roaming").join("Python"));
             paths.push(
                 home_dir
@@ -99,6 +131,7 @@ impl PipManager {
                     .join("Programs")
                     .join("Python"),
             );
+            return Ok(paths);
         }
 
         // System Python paths
@@ -107,6 +140,8 @@ impl PipManager {
             r"C:\Program Files\Python*",
             r"C:\Program Files (x86)\Python*",
         ];
+
+        let mut paths = Vec::new();
 
         for pattern in &python_roots {
             if let Ok(paths_iter) = glob::glob(pattern) {
@@ -131,26 +166,11 @@ impl PackageManager for PipManager {
     }
 
     async fn is_installed(&self) -> bool {
-        // Check for pip3 first, then pip
-        if which("pip3.exe").is_ok() || which("pip3").is_ok() {
-            return true;
-        }
-
-        if which("pip.exe").is_ok() || which("pip").is_ok() {
-            return true;
-        }
-
-        // Check python -m pip
-        if which("python.exe").is_ok() || which("python3.exe").is_ok() {
-            let python_cmd = if which("python3.exe").is_ok() {
-                "python3"
-            } else {
-                "python"
-            };
-
+        if let Ok(python_cmd) = Self::find_python_executable() {
             let output = Command::new(python_cmd)
                 .args(["-m", "pip", "--version"])
-                .output();
+                .output()
+                .await;
 
             matches!(output, Ok(result) if result.status.success())
         } else {
@@ -158,18 +178,17 @@ impl PackageManager for PipManager {
         }
     }
 
-    async fn get_version(&self) -> Result<Option<String>> {
-        // Try pip --version
-        if let Some(ref pip_path) = self.pip_path {
-            let output = Command::new(pip_path).arg("--version").output();
+    async fn get_version(&self) -> Result<String> {
+        let pip_path = self.get_pip_path()?;
 
-            match output {
-                Ok(result) if result.status.success() => {
-                    let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    return Ok(Some(version));
-                }
-                _ => {}
+        let output = Command::new(pip_path).arg("--version").output().await;
+
+        match output {
+            Ok(result) if result.status.success() => {
+                let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                return Ok(version);
             }
+            _ => {}
         }
 
         // Try python -m pip --version
@@ -178,19 +197,20 @@ impl PackageManager for PipManager {
         } else if which("python.exe").is_ok() {
             "python"
         } else {
-            return Ok(None);
+            bail!("Python not found");
         };
 
         let output = Command::new(python_cmd)
             .args(["-m", "pip", "--version"])
-            .output();
+            .output()
+            .await;
 
         match output {
             Ok(result) if result.status.success() => {
                 let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                Ok(Some(version))
+                Ok(version)
             }
-            _ => Ok(None),
+            _ => bail!("Failed to get pip version"),
         }
     }
 
@@ -239,7 +259,10 @@ impl PackageManager for PipManager {
         if let Some(ref pip_path) = self.pip_path {
             debug!("Using pip cache purge command");
 
-            let output = Command::new(pip_path).args(["cache", "purge"]).output();
+            let output = Command::new(pip_path)
+                .args(["cache", "purge"])
+                .output()
+                .await;
 
             match output {
                 Ok(result) => {
@@ -367,6 +390,9 @@ impl PackageManager for PipManager {
 
 impl Default for PipManager {
     fn default() -> Self {
-        Self::new()
+        Self {
+            pip_path: None,
+            cache_path: None,
+        }
     }
 }

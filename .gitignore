@@ -36,9 +36,5 @@ dist/
 *.bak
 *.backup
 
-# PowerShell scripts (optional - remove if you want them tracked)
-setup_*.ps1
-verify*.ps1
-check_*.ps1
-fix_*.ps1
-build_in_vs_dev.bat
+# Build artifacts (excluding build.ps1 which is needed)
+dist/
