@@ -61,7 +61,7 @@ impl DashboardViewModel {
             recent_operations: Vec::new(),
         }
     }
-    
+
     /// Update the dashboard
     pub fn update(&mut self) {
         // TODO: Update system information and stats

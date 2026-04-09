@@ -51,84 +51,101 @@ impl ServicesViewModel {
             status_message: None,
         }
     }
-    
+
     /// Update the services view model
     pub fn update(&mut self) {
         // TODO: Update service status
     }
-    
+
     /// Refresh services
-    pub fn refresh_services(&mut self, service_manager: &ServiceManager) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn refresh_services(
+        &mut self,
+        service_manager: &ServiceManager,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.services.clear();
-        
+
         // TODO: Get services from ServiceManager
-        
+
         self.status_message = Some("Services refreshed".to_string());
         Ok(())
     }
-    
+
     /// Start selected service
-    pub fn start_selected(&mut self, service_manager: &ServiceManager) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn start_selected(
+        &mut self,
+        service_manager: &ServiceManager,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(index) = self.selected_service {
             if index < self.services.len() {
                 let service_name = &self.services[index].name;
                 self.status_message = Some(format!("Starting {}...", service_name));
-                
+
                 // TODO: Start service
-                
+
                 self.status_message = Some(format!("{} started", service_name));
                 return Ok(());
             }
         }
-        
+
         Err("No service selected".into())
     }
-    
+
     /// Stop selected service
-    pub fn stop_selected(&mut self, service_manager: &ServiceManager) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn stop_selected(
+        &mut self,
+        service_manager: &ServiceManager,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(index) = self.selected_service {
             if index < self.services.len() {
                 let service_name = &self.services[index].name;
                 self.status_message = Some(format!("Stopping {}...", service_name));
-                
+
                 // TODO: Stop service
-                
+
                 self.status_message = Some(format!("{} stopped", service_name));
                 return Ok(());
             }
         }
-        
+
         Err("No service selected".into())
     }
-    
+
     /// Restart selected service
-    pub fn restart_selected(&mut self, service_manager: &ServiceManager) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn restart_selected(
+        &mut self,
+        service_manager: &ServiceManager,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(index) = self.selected_service {
             if index < self.services.len() {
                 let service_name = &self.services[index].name;
                 self.status_message = Some(format!("Restarting {}...", service_name));
-                
+
                 // TODO: Restart service
-                
+
                 self.status_message = Some(format!("{} restarted", service_name));
                 return Ok(());
             }
         }
-        
+
         Err("No service selected".into())
     }
-    
+
     /// Get filtered services
     pub fn filtered_services(&self) -> Vec<&ServiceInfo> {
-        self.services.iter()
+        self.services
+            .iter()
             .filter(|s| {
-                let matches_filter = self.filter_text.is_empty() 
-                    || s.name.to_lowercase().contains(&self.filter_text.to_lowercase())
-                    || s.display_name.to_lowercase().contains(&self.filter_text.to_lowercase());
-                
-                let matches_status = !self.show_running_only 
-                    || matches!(s.status, ServiceStatus::Running);
-                
+                let matches_filter = self.filter_text.is_empty()
+                    || s.name
+                        .to_lowercase()
+                        .contains(&self.filter_text.to_lowercase())
+                    || s.display_name
+                        .to_lowercase()
+                        .contains(&self.filter_text.to_lowercase());
+
+                let matches_status =
+                    !self.show_running_only || matches!(s.status, ServiceStatus::Running);
+
                 matches_filter && matches_status
             })
             .collect()

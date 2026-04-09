@@ -80,27 +80,27 @@ impl WindowsUpdateViewModel {
             },
         }
     }
-    
+
     /// Update the Windows Update view model
     pub fn update(&mut self) {
         // TODO: Update status and check for new updates
     }
-    
+
     /// Check for updates
     pub fn check_for_updates(&mut self) {
         self.status_message = Some("Checking for updates...".to_string());
         // TODO: Implement update checking
     }
-    
+
     /// Start cleanup
     pub fn start_cleanup(&mut self) {
         self.cleanup_in_progress = true;
         self.cleanup_progress = 0.0;
         self.status_message = Some("Cleaning Windows Update cache...".to_string());
-        
+
         // TODO: Implement cleanup
     }
-    
+
     /// Stop cleanup
     pub fn stop_cleanup(&mut self) {
         self.cleanup_in_progress = false;

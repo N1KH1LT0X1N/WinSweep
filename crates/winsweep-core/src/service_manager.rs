@@ -1,8 +1,9 @@
 //! Windows Service Manager
-//! 
+//!
 //! This module provides functionality to manage Windows services,
 //! including starting, stopping, and querying service status.
 
+use crate::home_edition_compat::HomeEditionCompat;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,17 +11,16 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use tracing::{debug, error, info, warn};
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, ERROR_SERVICE_DOES_NOT_EXIST, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
-use windows::Win32::System::Services::{
-    OpenSCManagerW, OpenServiceW, CloseServiceHandle, QueryServiceStatusEx,
-    StartServiceW, ControlService, DeleteService, EnumServicesStatusExW,
-    SC_HANDLE, SERVICE_STATUS_PROCESS, SC_ENUM_TYPE,
-    SERVICE_START, SERVICE_STOP, SERVICE_QUERY_STATUS, SERVICE_ENUMERATE_PROCESS,
-    SERVICE_CONTROL_STOP, SC_MANAGER_ALL_ACCESS, SERVICE_ALL_ACCESS,
-    SERVICE_STATUS, SERVICE_STATE_TYPE, SERVICE_WIN32_OWN_PROCESS, SERVICE_WIN32_SHARE_PROCESS,
-    SERVICE_STATE_ALL, SC_ENUM_PROCESS,
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_SERVICE_DOES_NOT_EXIST, HANDLE, INVALID_HANDLE_VALUE,
 };
-use crate::home_edition_compat::HomeEditionCompat;
+use windows::Win32::System::Services::{
+    CloseServiceHandle, ControlService, DeleteService, EnumServicesStatusExW, OpenSCManagerW,
+    OpenServiceW, QueryServiceStatusEx, StartServiceW, SC_ENUM_PROCESS, SC_ENUM_TYPE, SC_HANDLE,
+    SC_MANAGER_ALL_ACCESS, SERVICE_ALL_ACCESS, SERVICE_CONTROL_STOP, SERVICE_ENUMERATE_PROCESS,
+    SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATE_ALL, SERVICE_STATE_TYPE, SERVICE_STATUS,
+    SERVICE_STATUS_PROCESS, SERVICE_STOP, SERVICE_WIN32_OWN_PROCESS, SERVICE_WIN32_SHARE_PROCESS,
+};
 
 /// Service manager for Windows services
 pub struct ServiceManager {
@@ -81,14 +81,9 @@ pub enum ServiceStartType {
 impl ServiceManager {
     /// Create a new service manager
     pub fn new() -> Result<Self> {
-        let sc_manager = unsafe {
-            OpenSCManagerW(
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SC_MANAGER_ALL_ACCESS,
-            )
-        };
-        
+        let sc_manager =
+            unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ALL_ACCESS) };
+
         match sc_manager {
             Ok(handle) => {
                 if handle == INVALID_HANDLE_VALUE {
@@ -98,28 +93,31 @@ impl ServiceManager {
                         error.0
                     ));
                 }
-                
-                let home_compat = HomeEditionCompat::new()
-                    .context("Failed to create HomeEditionCompat")?;
-                
-                Ok(Self { 
+
+                let home_compat =
+                    HomeEditionCompat::new().context("Failed to create HomeEditionCompat")?;
+
+                Ok(Self {
                     sc_manager: handle,
                     home_compat,
                 })
             }
-            Err(e) => Err(anyhow::anyhow!("Failed to open Service Control Manager: {}", e)),
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to open Service Control Manager: {}",
+                e
+            )),
         }
     }
-    
+
     /// Get all services
     pub fn get_all_services(&self) -> Result<Vec<ServiceInfo>> {
         let mut services = Vec::new();
-        
+
         // First, get the required buffer size
         let mut bytes_needed = 0u32;
         let mut services_returned = 0u32;
         let mut resume_handle = 0u32;
-        
+
         unsafe {
             let result = EnumServicesStatusExW(
                 self.sc_manager,
@@ -133,15 +131,15 @@ impl ServiceManager {
                 &mut resume_handle,
                 Some(std::ptr::null()),
             );
-            
+
             if result.is_ok() || GetLastError().0 != ERROR_MORE_DATA.0 {
                 return Err(anyhow::anyhow!("Failed to enumerate services"));
             }
         }
-        
+
         // Allocate buffer
         let mut buffer = vec![0u8; bytes_needed as usize];
-        
+
         // Enumerate services
         unsafe {
             let result = EnumServicesStatusExW(
@@ -156,32 +154,32 @@ impl ServiceManager {
                 &mut resume_handle,
                 Some(std::ptr::null()),
             );
-            
+
             if result.is_err() {
                 return Err(anyhow::anyhow!("Failed to enumerate services"));
             }
         }
-        
+
         // Parse the buffer
         let mut current = buffer.as_ptr() as *const ENUM_SERVICE_STATUS_PROCESS;
-        
+
         for _ in 0..services_returned {
             let service_info = unsafe { self.parse_service_info(current)? };
             services.push(service_info);
-            
+
             // Move to next entry
             unsafe {
                 current = current.add(1);
             }
         }
-        
+
         Ok(services)
     }
-    
+
     /// Get a specific service by name
     pub fn get_service(&self, service_name: &str) -> Result<ServiceInfo> {
         let service_name_wide = to_wide(service_name);
-        
+
         let service_handle = unsafe {
             OpenServiceW(
                 self.sc_manager,
@@ -189,28 +187,32 @@ impl ServiceManager {
                 SERVICE_QUERY_STATUS,
             )
         };
-        
+
         match service_handle {
             Ok(handle) => {
                 if handle == INVALID_HANDLE_VALUE {
                     return Err(anyhow::anyhow!("Service not found: {}", service_name));
                 }
-                
+
                 let info = unsafe { self.get_service_info(handle, service_name)? };
                 unsafe { CloseServiceHandle(handle) };
-                
+
                 Ok(info)
             }
-            Err(e) => Err(anyhow::anyhow!("Failed to open service {}: {}", service_name, e)),
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to open service {}: {}",
+                service_name,
+                e
+            )),
         }
     }
-    
+
     /// Start a service
     pub fn start_service(&self, service_name: &str) -> Result<()> {
         info!("Starting service: {}", service_name);
-        
+
         let service_name_wide = to_wide(service_name);
-        
+
         let service_handle = unsafe {
             OpenServiceW(
                 self.sc_manager,
@@ -218,23 +220,17 @@ impl ServiceManager {
                 SERVICE_START,
             )
         };
-        
+
         match service_handle {
             Ok(handle) => {
                 if handle == INVALID_HANDLE_VALUE {
                     return Err(anyhow::anyhow!("Service not found: {}", service_name));
                 }
-                
-                let result = unsafe {
-                    StartServiceW(
-                        handle,
-                        0,
-                        std::ptr::null(),
-                    )
-                };
-                
+
+                let result = unsafe { StartServiceW(handle, 0, std::ptr::null()) };
+
                 unsafe { CloseServiceHandle(handle) };
-                
+
                 if result.is_err() {
                     let error = GetLastError();
                     return Err(anyhow::anyhow!(
@@ -243,19 +239,23 @@ impl ServiceManager {
                         error.0
                     ));
                 }
-                
+
                 Ok(())
             }
-            Err(e) => Err(anyhow::anyhow!("Failed to open service {}: {}", service_name, e)),
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to open service {}: {}",
+                service_name,
+                e
+            )),
         }
     }
-    
+
     /// Stop a service
     pub fn stop_service(&self, service_name: &str) -> Result<()> {
         info!("Stopping service: {}", service_name);
-        
+
         let service_name_wide = to_wide(service_name);
-        
+
         let service_handle = unsafe {
             OpenServiceW(
                 self.sc_manager,
@@ -263,24 +263,18 @@ impl ServiceManager {
                 SERVICE_STOP,
             )
         };
-        
+
         match service_handle {
             Ok(handle) => {
                 if handle == INVALID_HANDLE_VALUE {
                     return Err(anyhow::anyhow!("Service not found: {}", service_name));
                 }
-                
+
                 let mut status = SERVICE_STATUS::default();
-                let result = unsafe {
-                    ControlService(
-                        handle,
-                        SERVICE_CONTROL_STOP,
-                        &mut status,
-                    )
-                };
-                
+                let result = unsafe { ControlService(handle, SERVICE_CONTROL_STOP, &mut status) };
+
                 unsafe { CloseServiceHandle(handle) };
-                
+
                 if result.is_err() {
                     let error = GetLastError();
                     return Err(anyhow::anyhow!(
@@ -289,33 +283,37 @@ impl ServiceManager {
                         error.0
                     ));
                 }
-                
+
                 Ok(())
             }
-            Err(e) => Err(anyhow::anyhow!("Failed to open service {}: {}", service_name, e)),
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to open service {}: {}",
+                service_name,
+                e
+            )),
         }
     }
-    
+
     /// Restart a service
     pub fn restart_service(&self, service_name: &str) -> Result<()> {
         info!("Restarting service: {}", service_name);
-        
+
         // First stop the service
         self.stop_service(service_name)?;
-        
+
         // Wait for it to stop
         std::thread::sleep(std::time::Duration::from_secs(2));
-        
+
         // Then start it
         self.start_service(service_name)?;
-        
+
         Ok(())
     }
-    
+
     /// Check if a service exists
     pub fn service_exists(&self, service_name: &str) -> bool {
         let service_name_wide = to_wide(service_name);
-        
+
         let service_handle = unsafe {
             OpenServiceW(
                 self.sc_manager,
@@ -323,7 +321,7 @@ impl ServiceManager {
                 SERVICE_QUERY_STATUS,
             )
         };
-        
+
         match service_handle {
             Ok(handle) => {
                 let exists = handle != INVALID_HANDLE_VALUE;
@@ -333,12 +331,15 @@ impl ServiceManager {
             Err(_) => false,
         }
     }
-    
+
     /// Parse service information from ENUM_SERVICE_STATUS_PROCESS
-    unsafe fn parse_service_info(&self, entry: *const ENUM_SERVICE_STATUS_PROCESS) -> Result<ServiceInfo> {
+    unsafe fn parse_service_info(
+        &self,
+        entry: *const ENUM_SERVICE_STATUS_PROCESS,
+    ) -> Result<ServiceInfo> {
         let name = from_wide((*entry).lpServiceName);
         let display_name = from_wide((*entry).lpDisplayName);
-        
+
         let status = ServiceStatus {
             service_type: (*entry).ServiceStatusProcess.dwServiceType,
             current_state: ServiceState::from((*entry).ServiceStatusProcess.dwCurrentState),
@@ -354,15 +355,15 @@ impl ServiceManager {
             },
             service_flags: (*entry).ServiceStatusProcess.dwServiceFlags,
         };
-        
+
         // Determine start type (would need additional query)
         let start_type = ServiceStartType::Unknown;
-        
+
         // Determine capabilities
         let can_stop = status.controls_accepted & SERVICE_ACCEPT_STOP != 0;
         let can_start = true; // Simplified
         let can_delete = false; // Would need additional check
-        
+
         Ok(ServiceInfo {
             name,
             display_name,
@@ -373,12 +374,16 @@ impl ServiceManager {
             can_delete,
         })
     }
-    
+
     /// Get service information from service handle
-    unsafe fn get_service_info(&self, service_handle: SC_HANDLE, service_name: &str) -> Result<ServiceInfo> {
+    unsafe fn get_service_info(
+        &self,
+        service_handle: SC_HANDLE,
+        service_name: &str,
+    ) -> Result<ServiceInfo> {
         let mut buffer = [0u8; 36]; // Size of SERVICE_STATUS_PROCESS
         let mut bytes_needed = 0u32;
-        
+
         let result = QueryServiceStatusEx(
             service_handle,
             SC_STATUS_PROCESS_INFO,
@@ -386,13 +391,13 @@ impl ServiceManager {
             buffer.len() as u32,
             &mut bytes_needed,
         );
-        
+
         if result.is_err() {
             return Err(anyhow::anyhow!("Failed to query service status"));
         }
-        
+
         let status_process = &*(buffer.as_ptr() as *const SERVICE_STATUS_PROCESS);
-        
+
         let status = ServiceStatus {
             service_type: status_process.dwServiceType,
             current_state: ServiceState::from(status_process.dwCurrentState),
@@ -408,7 +413,7 @@ impl ServiceManager {
             },
             service_flags: status_process.dwServiceFlags,
         };
-        
+
         Ok(ServiceInfo {
             name: service_name.to_string(),
             display_name: service_name.to_string(), // Simplified
@@ -472,14 +477,14 @@ fn from_wide(ptr: PWSTR) -> String {
         if ptr.is_null() {
             return String::new();
         }
-        
+
         let mut len = 0;
         let mut current = ptr;
         while *current != 0 {
             len += 1;
             current = current.add(1);
         }
-        
+
         let slice = std::slice::from_raw_parts(ptr, len);
         String::from_utf16_lossy(slice)
     }
@@ -490,26 +495,26 @@ impl ServiceManager {
     pub fn is_safe_to_disable(&self, service_name: &str) -> bool {
         // Critical system services that should never be disabled
         let critical_services = [
-            "Winmgmt",      // WMI
-            "RpcSs",        // RPC
-            "EventLog",     // Event Log
-            "PlugPlay",     // Plug and Play
-            "Power",        // Power management
-            "ProfSvc",      // User Profile Service
-            "DcomLaunch",   // DCOM
-            "RpcEptMapper", // RPC Endpoint Mapper
-            "SamSs",        // Security Accounts Manager
-            "LSM",          // Local Session Manager
-            "WinDefend",    // Windows Defender
-            "Mpssvc",       // Windows Firewall
-            "BFE",          // Base Filtering Engine
-            "PolicyAgent",  // IPsec Policy Agent
-            "cryptsvc",     // Cryptographic Services
-            "Dnscache",     // DNS Client
-            "LanmanServer", // Server
+            "Winmgmt",           // WMI
+            "RpcSs",             // RPC
+            "EventLog",          // Event Log
+            "PlugPlay",          // Plug and Play
+            "Power",             // Power management
+            "ProfSvc",           // User Profile Service
+            "DcomLaunch",        // DCOM
+            "RpcEptMapper",      // RPC Endpoint Mapper
+            "SamSs",             // Security Accounts Manager
+            "LSM",               // Local Session Manager
+            "WinDefend",         // Windows Defender
+            "Mpssvc",            // Windows Firewall
+            "BFE",               // Base Filtering Engine
+            "PolicyAgent",       // IPsec Policy Agent
+            "cryptsvc",          // Cryptographic Services
+            "Dnscache",          // DNS Client
+            "LanmanServer",      // Server
             "LanmanWorkstation", // Workstation
-            "Netlogon",     // Netlogon
-            "MpsSvc",       // Windows Firewall
+            "Netlogon",          // Netlogon
+            "MpsSvc",            // Windows Firewall
         ];
 
         !critical_services.contains(&service_name)
@@ -518,19 +523,19 @@ impl ServiceManager {
     /// Get list of services that are safe to disable for cleanup
     pub fn get_cleanup_safe_services(&self) -> Vec<&'static str> {
         vec![
-            "wuauserv", // Windows Update
-            "bits",     // Background Intelligent Transfer Service
-            "dosvc",    // Delivery Optimization
-            "uspso",    // Update Session Orchestrator
+            "wuauserv",  // Windows Update
+            "bits",      // Background Intelligent Transfer Service
+            "dosvc",     // Delivery Optimization
+            "uspso",     // Update Session Orchestrator
             "srservice", // System Restore Service
-            "vss",      // Volume Shadow Copy
-            "wbengine", // Windows Backup Service
-            "sdvsvc",   // Shell Hardware Detection
-            "Themes",   // Themes (visual)
-            "AudioSrv", // Windows Audio
-            "stisvc",   // Windows Image Acquisition (WIA)
-            "WSearch",  // Windows Search
-            "SysMain",  // Superfetch/Prefetch
+            "vss",       // Volume Shadow Copy
+            "wbengine",  // Windows Backup Service
+            "sdvsvc",    // Shell Hardware Detection
+            "Themes",    // Themes (visual)
+            "AudioSrv",  // Windows Audio
+            "stisvc",    // Windows Image Acquisition (WIA)
+            "WSearch",   // Windows Search
+            "SysMain",   // Superfetch/Prefetch
         ]
     }
 
@@ -550,7 +555,7 @@ impl ServiceManager {
 
         // Get current service info
         let service_info = self.get_service(service_name)?;
-        
+
         // Check if service can be stopped
         if !service_info.can_stop {
             warn!("Service {} cannot be stopped", service_name);
@@ -652,7 +657,7 @@ impl ServiceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_service_manager_creation() {
         // This test requires running on Windows
@@ -662,7 +667,7 @@ mod tests {
             assert!(manager.is_ok());
         }
     }
-    
+
     #[test]
     fn test_service_state_conversion() {
         assert_eq!(ServiceState::from(1), ServiceState::Stopped);

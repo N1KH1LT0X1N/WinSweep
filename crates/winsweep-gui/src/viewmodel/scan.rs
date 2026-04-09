@@ -56,27 +56,27 @@ impl ScanViewModel {
             },
         }
     }
-    
+
     /// Update the scan view model
     pub fn update(&mut self) {
         // TODO: Update scan progress if scanning
     }
-    
+
     /// Start a new scan
     pub fn start_scan(&mut self, path: &str) {
         self.scan_in_progress = true;
         self.scan_progress = 0.0;
         self.scan_results.clear();
-        
+
         // TODO: Implement actual scanning
     }
-    
+
     /// Stop the current scan
     pub fn stop_scan(&mut self) {
         self.scan_in_progress = false;
         self.scan_progress = 0.0;
     }
-    
+
     /// Delete selected scan result
     pub fn delete_selected(&mut self) {
         if let Some(index) = self.selected_result {

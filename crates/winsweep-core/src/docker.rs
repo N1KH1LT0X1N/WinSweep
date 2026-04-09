@@ -1,5 +1,5 @@
 //! Docker API client and management
-//! 
+//!
 //! This module provides functionality to interact with Docker daemon,
 //! including API version negotiation, container management, image cleanup,
 //! volume cleanup, and build cache management.
@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info, warn};
 use tokio::process;
+use tracing::{debug, error, info, warn};
 
 /// Docker API client with version negotiation
 pub struct DockerClient {
@@ -108,47 +108,47 @@ impl DockerClient {
     pub async fn new() -> Result<Self> {
         let docker_path = Self::find_docker_executable();
         let daemon_running = Self::check_daemon_status(&docker_path).await?;
-        
+
         let api_version = if daemon_running {
             Self::negotiate_api_version(&docker_path).await?
         } else {
             "1.41".to_string() // Default latest stable
         };
-        
+
         Ok(Self {
             api_version,
             daemon_running,
             docker_path,
         })
     }
-    
+
     /// Find Docker executable
     fn find_docker_executable() -> Option<PathBuf> {
         // Check for docker.exe on Windows
         if let Ok(path) = which::which("docker.exe") {
             return Some(path);
         }
-        
+
         // Check for docker (WSL/Linux)
         if let Ok(path) = which::which("docker") {
             return Some(path);
         }
-        
+
         // Check common installation paths
         let common_paths = [
             r"C:\Program Files\Docker\Docker\resources\docker.exe",
             r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
         ];
-        
+
         for path in &common_paths {
             if PathBuf::from(path).exists() {
                 return Some(PathBuf::from(path));
             }
         }
-        
+
         None
     }
-    
+
     /// Check if Docker daemon is running
     async fn check_daemon_status(docker_path: &Option<PathBuf>) -> Result<bool> {
         if let Some(ref docker_path) = docker_path {
@@ -156,7 +156,7 @@ impl DockerClient {
                 .arg("info")
                 .output()
                 .await;
-            
+
             match output {
                 Ok(result) => Ok(result.status.success()),
                 Err(_) => Ok(false),
@@ -165,7 +165,7 @@ impl DockerClient {
             Ok(false)
         }
     }
-    
+
     /// Negotiate API version with Docker daemon
     async fn negotiate_api_version(docker_path: &Option<PathBuf>) -> Result<String> {
         if let Some(ref docker_path) = docker_path {
@@ -174,28 +174,30 @@ impl DockerClient {
                 .args(["version", "--format", "{{.Server.APIVersion}}"])
                 .output()
                 .await?;
-            
+
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 debug!("Docker API version: {}", version);
                 return Ok(version);
             }
         }
-        
+
         // Fallback to default
         warn!("Could not determine Docker API version, using default");
         Ok("1.41".to_string())
     }
-    
+
     /// Get all containers
     pub async fn get_containers(&self) -> Result<Vec<ContainerInfo>> {
         if !self.daemon_running {
             return Ok(Vec::new());
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         // Get container list with format
         let output = process::Command::new(docker_path)
             .args([
@@ -206,18 +208,18 @@ impl DockerClient {
             ])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("Failed to list containers: {}", error));
         }
-        
+
         let mut containers = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 4 {
                 let container = ContainerInfo {
@@ -233,19 +235,21 @@ impl DockerClient {
                 containers.push(container);
             }
         }
-        
+
         Ok(containers)
     }
-    
+
     /// Get all images
     pub async fn get_images(&self) -> Result<Vec<ImageInfo>> {
         if !self.daemon_running {
             return Ok(Vec::new());
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         // Get image list with format
         let output = process::Command::new(docker_path)
             .args([
@@ -255,24 +259,24 @@ impl DockerClient {
             ])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("Failed to list images: {}", error));
         }
-        
+
         let mut images = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             if line.trim().is_empty() || line.starts_with("REPOSITORY") {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 3 {
                 let size = Self::parse_size(parts.get(3).unwrap_or(&"0B")).unwrap_or(0);
                 let created = Self::parse_docker_time(parts.get(4).unwrap_or(&""))
                     .unwrap_or(SystemTime::UNIX_EPOCH);
-                
+
                 let image = ImageInfo {
                     id: parts[0].to_string(),
                     repository: parts[1].to_string(),
@@ -285,41 +289,43 @@ impl DockerClient {
                 images.push(image);
             }
         }
-        
+
         Ok(images)
     }
-    
+
     /// Get all volumes
     pub async fn get_volumes(&self) -> Result<Vec<VolumeInfo>> {
         if !self.daemon_running {
             return Ok(Vec::new());
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         // Get volume list with format
         let output = process::Command::new(docker_path)
             .args([
                 "volume",
                 "ls",
                 "--format",
-                "{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}\t{{.CreatedAt}}"
+                "{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}\t{{.CreatedAt}}",
             ])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("Failed to list volumes: {}", error));
         }
-        
+
         let mut volumes = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             if line.trim().is_empty() || line.starts_with("DRIVER") {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 3 {
                 let volume = VolumeInfo {
@@ -328,47 +334,49 @@ impl DockerClient {
                     mount_point: PathBuf::from(parts[2]),
                     created: Self::parse_docker_time(parts.get(3).unwrap_or(&""))
                         .unwrap_or(SystemTime::UNIX_EPOCH),
-                    size: None, // Would need additional calculation
+                    size: None,             // Would need additional calculation
                     containers: Vec::new(), // Would need additional query
                 };
                 volumes.push(volume);
             }
         }
-        
+
         Ok(volumes)
     }
-    
+
     /// Get all networks
     pub async fn get_networks(&self) -> Result<Vec<NetworkInfo>> {
         if !self.daemon_running {
             return Ok(Vec::new());
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         // Get network list with format
         let output = process::Command::new(docker_path)
             .args([
                 "network",
                 "ls",
                 "--format",
-                "{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}\t{{.Internal}}"
+                "{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}\t{{.Internal}}",
             ])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("Failed to list networks: {}", error));
         }
-        
+
         let mut networks = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             if line.trim().is_empty() || line.starts_with("NETWORK") {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 4 {
                 let network = NetworkInfo {
@@ -383,24 +391,26 @@ impl DockerClient {
                 networks.push(network);
             }
         }
-        
+
         Ok(networks)
     }
-    
+
     /// Stop a container
     pub async fn stop_container(&self, container_id: &str) -> Result<()> {
         if !self.daemon_running {
             return Err(anyhow::anyhow!("Docker daemon is not running"));
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         let output = process::Command::new(docker_path)
             .args(["stop", container_id])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             Err(anyhow::anyhow!("Failed to stop container: {}", error))
@@ -408,27 +418,29 @@ impl DockerClient {
             Ok(())
         }
     }
-    
+
     /// Remove a container
     pub async fn remove_container(&self, container_id: &str, force: bool) -> Result<()> {
         if !self.daemon_running {
             return Err(anyhow::anyhow!("Docker daemon is not running"));
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         let mut args = vec!["rm"];
         if force {
             args.push("-f");
         }
         args.push(container_id);
-        
+
         let output = process::Command::new(docker_path)
             .args(args)
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             Err(anyhow::anyhow!("Failed to remove container: {}", error))
@@ -436,27 +448,29 @@ impl DockerClient {
             Ok(())
         }
     }
-    
+
     /// Remove an image
     pub async fn remove_image(&self, image_id: &str, force: bool) -> Result<()> {
         if !self.daemon_running {
             return Err(anyhow::anyhow!("Docker daemon is not running"));
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         let mut args = vec!["rmi"];
         if force {
             args.push("-f");
         }
         args.push(image_id);
-        
+
         let output = process::Command::new(docker_path)
             .args(args)
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             Err(anyhow::anyhow!("Failed to remove image: {}", error))
@@ -464,27 +478,29 @@ impl DockerClient {
             Ok(())
         }
     }
-    
+
     /// Remove a volume
     pub async fn remove_volume(&self, volume_name: &str, force: bool) -> Result<()> {
         if !self.daemon_running {
             return Err(anyhow::anyhow!("Docker daemon is not running"));
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         let mut args = vec!["volume", "rm"];
         if force {
             args.push("-f");
         }
         args.push(volume_name);
-        
+
         let output = process::Command::new(docker_path)
             .args(args)
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             Err(anyhow::anyhow!("Failed to remove volume: {}", error))
@@ -492,21 +508,23 @@ impl DockerClient {
             Ok(())
         }
     }
-    
+
     /// Remove a network
     pub async fn remove_network(&self, network_name: &str) -> Result<()> {
         if !self.daemon_running {
             return Err(anyhow::anyhow!("Docker daemon is not running"));
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         let output = process::Command::new(docker_path)
             .args(["network", "rm", network_name])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             Err(anyhow::anyhow!("Failed to remove network: {}", error))
@@ -514,21 +532,23 @@ impl DockerClient {
             Ok(())
         }
     }
-    
+
     /// Clean build cache
     pub async fn clean_build_cache(&self) -> Result<()> {
         if !self.daemon_running {
             return Err(anyhow::anyhow!("Docker daemon is not running"));
         }
-        
-        let docker_path = self.docker_path.as_ref()
+
+        let docker_path = self
+            .docker_path
+            .as_ref()
             .context("Docker executable not found")?;
-        
+
         let output = process::Command::new(docker_path)
             .args(["builder", "prune", "-f"])
             .output()
             .await?;
-        
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             Err(anyhow::anyhow!("Failed to clean build cache: {}", error))
@@ -536,7 +556,7 @@ impl DockerClient {
             Ok(())
         }
     }
-    
+
     /// Perform comprehensive cleanup
     pub async fn cleanup_all(&self, options: &CleanupOptions) -> Result<DockerCleanupResult> {
         let start_time = std::time::Instant::now();
@@ -550,20 +570,26 @@ impl DockerClient {
             errors: Vec::new(),
             duration_ms: 0,
         };
-        
+
         // Stop and remove containers
         if options.remove_containers {
             let containers = self.get_containers().await?;
             for container in containers {
                 if options.stop_running && matches!(container.status, ContainerStatus::Running) {
                     if let Err(e) = self.stop_container(&container.id).await {
-                        result.errors.push(format!("Failed to stop container {}: {}", container.name, e));
+                        result.errors.push(format!(
+                            "Failed to stop container {}: {}",
+                            container.name, e
+                        ));
                         continue;
                     }
                 }
-                
+
                 if let Err(e) = self.remove_container(&container.id, options.force).await {
-                    result.errors.push(format!("Failed to remove container {}: {}", container.name, e));
+                    result.errors.push(format!(
+                        "Failed to remove container {}: {}",
+                        container.name, e
+                    ));
                 } else {
                     result.containers_removed += 1;
                     // Add size calculation
@@ -576,14 +602,17 @@ impl DockerClient {
                 }
             }
         }
-        
+
         // Remove images
         if options.remove_images {
             let images = self.get_images().await?;
             for image in images {
                 if options.remove_dangling || !image.dangling {
                     if let Err(e) = self.remove_image(&image.id, options.force).await {
-                        result.errors.push(format!("Failed to remove image {}: {}", image.repository, e));
+                        result.errors.push(format!(
+                            "Failed to remove image {}: {}",
+                            image.repository, e
+                        ));
                     } else {
                         result.images_removed += 1;
                         result.space_freed += image.size;
@@ -591,20 +620,22 @@ impl DockerClient {
                 }
             }
         }
-        
+
         // Remove volumes
         if options.remove_volumes {
             let volumes = self.get_volumes().await?;
             for volume in volumes {
                 if let Err(e) = self.remove_volume(&volume.name, options.force).await {
-                    result.errors.push(format!("Failed to remove volume {}: {}", volume.name, e));
+                    result
+                        .errors
+                        .push(format!("Failed to remove volume {}: {}", volume.name, e));
                 } else {
                     result.volumes_removed += 1;
                     // Would need to calculate volume size
                 }
             }
         }
-        
+
         // Remove networks
         if options.remove_networks {
             let networks = self.get_networks().await?;
@@ -613,28 +644,32 @@ impl DockerClient {
                 if network.name == "bridge" || network.name == "host" || network.name == "none" {
                     continue;
                 }
-                
+
                 if let Err(e) = self.remove_network(&network.name).await {
-                    result.errors.push(format!("Failed to remove network {}: {}", network.name, e));
+                    result
+                        .errors
+                        .push(format!("Failed to remove network {}: {}", network.name, e));
                 } else {
                     result.networks_removed += 1;
                 }
             }
         }
-        
+
         // Clean build cache
         if options.clean_build_cache {
             if let Err(e) = self.clean_build_cache().await {
-                result.errors.push(format!("Failed to clean build cache: {}", e));
+                result
+                    .errors
+                    .push(format!("Failed to clean build cache: {}", e));
             } else {
                 result.build_cache_cleaned = true;
             }
         }
-        
+
         result.duration_ms = start_time.elapsed().as_millis() as u64;
         Ok(result)
     }
-    
+
     // Helper methods
     fn parse_container_status(status: &str) -> ContainerStatus {
         if status.starts_with("Up") {
@@ -655,19 +690,19 @@ impl DockerClient {
             ContainerStatus::Unknown
         }
     }
-    
+
     fn parse_docker_time(time_str: &str) -> Option<SystemTime> {
         // Docker uses RFC3339 format
         chrono::DateTime::parse_from_rfc3339(time_str)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc).into())
     }
-    
+
     fn parse_ports(ports_str: &str) -> Vec<PortMapping> {
         if ports_str.is_empty() {
             return Vec::new();
         }
-        
+
         let mut ports = Vec::new();
         for port_part in ports_str.split(',') {
             let parts: Vec<&str> = port_part.trim().split(':').collect();
@@ -676,13 +711,13 @@ impl DockerClient {
                     if let Some(slash_pos) = container_part.find('/') {
                         let container_port = container_part[..slash_pos].parse::<u16>().ok()?;
                         let protocol = container_part[slash_pos + 1..].to_string();
-                        
+
                         let host_port = if parts.len() == 3 {
                             parts[1].parse::<u16>().ok()
                         } else {
                             None
                         };
-                        
+
                         ports.push(PortMapping {
                             container_port,
                             host_port,
@@ -692,19 +727,19 @@ impl DockerClient {
                 }
             }
         }
-        
+
         ports
     }
-    
+
     fn parse_size(size_str: &str) -> Option<u64> {
         let size_str = size_str.trim();
         if size_str.is_empty() {
             return Some(0);
         }
-        
+
         let (num, unit) = size_str.split_at(size_str.len().saturating_sub(2));
         let num: f64 = num.parse().ok()?;
-        
+
         match unit {
             "B" => Some(num as u64),
             "kB" => Some((num * 1024.0) as u64),
@@ -713,12 +748,12 @@ impl DockerClient {
             _ => None,
         }
     }
-    
+
     /// Get daemon status
     pub fn is_daemon_running(&self) -> bool {
         self.daemon_running
     }
-    
+
     /// Get API version
     pub fn api_version(&self) -> &str {
         &self.api_version
@@ -756,20 +791,29 @@ impl Default for CleanupOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_docker_client_creation() {
         let client = DockerClient::new().await;
         assert!(client.is_ok());
     }
-    
+
     #[test]
     fn test_parse_container_status() {
-        assert_eq!(DockerClient::parse_container_status("Up 2 hours"), ContainerStatus::Running);
-        assert_eq!(DockerClient::parse_container_status("Exited (0) 2 hours ago"), ContainerStatus::Exited);
-        assert_eq!(DockerClient::parse_container_status("Paused"), ContainerStatus::Paused);
+        assert_eq!(
+            DockerClient::parse_container_status("Up 2 hours"),
+            ContainerStatus::Running
+        );
+        assert_eq!(
+            DockerClient::parse_container_status("Exited (0) 2 hours ago"),
+            ContainerStatus::Exited
+        );
+        assert_eq!(
+            DockerClient::parse_container_status("Paused"),
+            ContainerStatus::Paused
+        );
     }
-    
+
     #[test]
     fn test_parse_size() {
         assert_eq!(DockerClient::parse_size("0B"), Some(0));

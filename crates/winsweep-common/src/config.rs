@@ -1,11 +1,11 @@
 //! Configuration management for WinSweep
-//! 
+//!
 //! This module handles loading, saving, and validating configuration.
 
+use crate::types::ScanConfig;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::types::ScanConfig;
-use anyhow::{Result, Context};
 
 /// Main WinSweep configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +115,7 @@ impl Default for Config {
             scan_min_size: 1024, // 1KB
             notify_cleanup_complete: true,
             notify_low_disk_space: true,
-            low_disk_threshold: 10, // 10%
+            low_disk_threshold: 10,   // 10%
             notification_duration: 5, // 5 seconds
             auto_cleanup_enabled: false,
             auto_cleanup_days: 7, // weekly
@@ -173,55 +173,56 @@ impl Config {
     /// Load configuration from file
     pub fn load() -> Result<Self> {
         let config_path = get_config_path();
-        
+
         if !config_path.exists() {
             // Create default config
             let default_config = Config::default();
             default_config.save()?;
             return Ok(default_config);
         }
-        
+
         let config_str = std::fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
-        
-        let config: Config = toml::from_str(&config_str)
-            .with_context(|| "Failed to parse config file")?;
-        
+
+        let config: Config =
+            toml::from_str(&config_str).with_context(|| "Failed to parse config file")?;
+
         Ok(config)
     }
-    
+
     /// Save configuration to file
     pub fn save(&self) -> Result<()> {
         let config_path = get_config_path();
-        
+
         // Ensure config directory exists
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
-        
-        let config_str = toml::to_string_pretty(self)
-            .with_context(|| "Failed to serialize config")?;
-        
+
+        let config_str =
+            toml::to_string_pretty(self).with_context(|| "Failed to serialize config")?;
+
         std::fs::write(&config_path, config_str)
             .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
-        
+
         Ok(())
     }
-    
+
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
         // Validate scan paths
         if self.scan.paths.is_empty() {
             anyhow::bail!("At least one scan path must be specified");
         }
-        
+
         for path in &self.scan.paths {
             if !path.exists() {
                 anyhow::bail!("Scan path does not exist: {}", path.display());
             }
         }
-        
+
         // Validate parallel jobs
         if let Some(jobs) = self.scan.parallel_jobs {
             if jobs == 0 {
@@ -231,63 +232,59 @@ impl Config {
                 anyhow::bail!("Parallel jobs should not exceed 256");
             }
         }
-        
+
         // Validate max file size
         if let Some(size) = self.scan.max_file_size {
             if size == 0 {
                 anyhow::bail!("Max file size must be greater than 0");
             }
         }
-        
+
         Ok(())
     }
 }
 
 /// Get the configuration file path
 fn get_config_path() -> PathBuf {
-    let mut path = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
-    
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+
     path.push("WinSweep");
     path.push("config.toml");
-    
+
     path
 }
 
 /// Get the log file path
 pub fn get_log_path() -> PathBuf {
-    let mut path = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
-    
+    let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+
     path.push("WinSweep");
     path.push("logs");
-    
+
     // Ensure log directory exists
     std::fs::create_dir_all(&path).ok();
-    
+
     path.push("winsweep.log");
-    
+
     path
 }
 
 /// Get the cache directory path
 pub fn get_cache_dir() -> PathBuf {
-    let mut path = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
-    
+    let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+
     path.push("WinSweep");
     path.push("cache");
-    
+
     path
 }
 
 /// Get the application data directory
 pub fn get_data_dir() -> PathBuf {
-    let mut path = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
-    
+    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+
     path.push("WinSweep");
-    
+
     path
 }
 
@@ -295,13 +292,13 @@ pub fn get_data_dir() -> PathBuf {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    
+
     #[test]
     fn test_default_config() {
         let config = Config::default();
         assert!(config.validate().is_ok());
     }
-    
+
     #[test]
     fn test_config_serialization() {
         let config = Config::default();
@@ -309,7 +306,7 @@ mod tests {
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(config.scan.paths, parsed.scan.paths);
     }
-    
+
     #[test]
     fn test_config_validation_empty_paths() {
         let mut config = Config::default();

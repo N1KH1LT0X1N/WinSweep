@@ -1,5 +1,5 @@
 //! Windows edition detection and feature availability
-//! 
+//!
 //! This module detects Windows edition and available features,
 //! particularly for handling differences between Home and Pro editions.
 
@@ -54,12 +54,12 @@ impl WindowsEditionDetector {
         let edition = Self::detect_edition()?;
         let build_number = Self::get_build_number()?;
         let version = Self::get_version()?;
-        
+
         info!("Detected Windows edition: {:?}", edition);
         info!("Windows version: {} (Build {})", version, build_number);
-        
+
         let features = Self::detect_features(edition, build_number)?;
-        
+
         Ok(Self {
             edition,
             features,
@@ -67,53 +67,53 @@ impl WindowsEditionDetector {
             version,
         })
     }
-    
+
     /// Get the detected Windows edition
     pub fn edition(&self) -> WindowsEdition {
         self.edition
     }
-    
+
     /// Get the detected features
     pub fn features(&self) -> &WindowsFeatures {
         &self.features
     }
-    
+
     /// Get the build number
     pub fn build_number(&self) -> u32 {
         self.build_number
     }
-    
+
     /// Get the version string
     pub fn version(&self) -> &str {
         &self.version
     }
-    
+
     /// Check if a feature is available
     pub fn has_feature(&self, feature: impl Fn(&WindowsFeatures) -> bool) -> bool {
         feature(&self.features)
     }
-    
+
     /// Detect Windows edition from registry
     fn detect_edition() -> Result<WindowsEdition> {
         use crate::windows_api::WindowsApi;
-        
+
         let api = WindowsApi::new()?;
-        
+
         // Try multiple registry paths for edition detection
         let paths = [
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\EditionSpecific",
             r"SYSTEM\CurrentControlSet\Control\ProductOptions",
         ];
-        
+
         for path in &paths {
             // Try different value names
             let value_names = ["EditionID", "ProductName", "ProductType"];
-            
+
             for value_name in &value_names {
                 if let Ok(edition_string) = api.read_registry_string(path, value_name) {
                     debug!("Found edition string: {}", edition_string);
-                    
+
                     let edition = Self::parse_edition_string(&edition_string);
                     if edition != WindowsEdition::Unknown {
                         return Ok(edition);
@@ -121,15 +121,15 @@ impl WindowsEditionDetector {
                 }
             }
         }
-        
+
         warn!("Could not detect Windows edition from registry");
         Ok(WindowsEdition::Unknown)
     }
-    
+
     /// Parse edition string into enum
     fn parse_edition_string(s: &str) -> WindowsEdition {
         let s_lower = s.to_lowercase();
-        
+
         if s_lower.contains("home") {
             WindowsEdition::Home
         } else if s_lower.contains("pro") && s_lower.contains("education") {
@@ -146,30 +146,31 @@ impl WindowsEditionDetector {
             WindowsEdition::Unknown
         }
     }
-    
+
     /// Get Windows build number
     fn get_build_number() -> Result<u32> {
         use crate::windows_api::WindowsApi;
-        
+
         let api = WindowsApi::new()?;
-        
+
         if let Ok(build_str) = api.read_registry_string(
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
             "CurrentBuildNumber",
         ) {
-            build_str.parse::<u32>()
+            build_str
+                .parse::<u32>()
                 .context("Failed to parse build number")
         } else {
             Err(anyhow::anyhow!("Could not read build number from registry"))
         }
     }
-    
+
     /// Get Windows version string
     fn get_version() -> Result<String> {
         use crate::windows_api::WindowsApi;
-        
+
         let api = WindowsApi::new()?;
-        
+
         // Try DisplayVersion first (Windows 10/11)
         if let Ok(version) = api.read_registry_string(
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
@@ -184,7 +185,7 @@ impl WindowsEditionDetector {
             )
         }
     }
-    
+
     /// Detect available features based on edition and build
     fn detect_features(edition: WindowsEdition, build: u32) -> Result<WindowsFeatures> {
         let mut features = WindowsFeatures {
@@ -204,7 +205,7 @@ impl WindowsEditionDetector {
             has_windows_defender_network_inspection: false,
             has_windows_defender_tamper_protection: false,
         };
-        
+
         // Feature availability by edition
         match edition {
             WindowsEdition::Home => {
@@ -255,34 +256,34 @@ impl WindowsEditionDetector {
                 warn!("Unknown edition, assuming minimal feature set");
             }
         }
-        
+
         // Detect WSL availability
         features.has_wsl = Self::detect_wsl_availability()?;
         if features.has_wsl {
             features.has_wsl2 = Self::detect_wsl2_availability()?;
         }
-        
+
         // Detect Docker Desktop
         features.has_docker_desktop = Self::detect_docker_desktop()?;
-        
+
         // Detect PowerShell 7
         features.has_power_shell_7 = Self::detect_powershell_7()?;
-        
+
         // Windows Defender features (available on all editions with recent builds)
         if build >= 18362 {
             features.has_windows_defender_network_inspection = true;
             features.has_windows_defender_tamper_protection = true;
         }
-        
+
         Ok(features)
     }
-    
+
     /// Detect WSL availability
     fn detect_wsl_availability() -> Result<bool> {
         use crate::windows_api::WindowsApi;
-        
+
         let api = WindowsApi::new()?;
-        
+
         // Check for WSL feature in registry
         if let Ok(_) = api.read_registry_string(
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\AppModel\StateRepository",
@@ -290,21 +291,21 @@ impl WindowsEditionDetector {
         ) {
             return Ok(true);
         }
-        
+
         // Check for WSL executable
         if which::which("wsl.exe").is_ok() {
             return Ok(true);
         }
-        
+
         Ok(false)
     }
-    
+
     /// Detect WSL2 availability
     fn detect_wsl2_availability() -> Result<bool> {
         use crate::windows_api::WindowsApi;
-        
+
         let api = WindowsApi::new()?;
-        
+
         // Check for WSL2 kernel
         if let Ok(_) = api.read_registry_string(
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss",
@@ -312,7 +313,7 @@ impl WindowsEditionDetector {
         ) {
             return Ok(true);
         }
-        
+
         // Try to run wsl --status
         if which::which("wsl.exe").is_ok() {
             // In a real implementation, we'd run wsl --status and parse output
@@ -321,59 +322,59 @@ impl WindowsEditionDetector {
                 return Ok(build >= 18362);
             }
         }
-        
+
         Ok(false)
     }
-    
+
     /// Detect Docker Desktop installation
     fn detect_docker_desktop() -> Result<bool> {
         // Check for Docker Desktop executable
         if which::which("docker.exe").is_ok() {
             return Ok(true);
         }
-        
+
         // Check common installation paths
         let paths = [
             r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
             r"C:\Program Files\Docker\Docker\resources\docker.exe",
         ];
-        
+
         for path in &paths {
             if std::path::Path::new(path).exists() {
                 return Ok(true);
             }
         }
-        
+
         Ok(false)
     }
-    
+
     /// Detect PowerShell 7 installation
     fn detect_powershell_7() -> Result<bool> {
         // Check for pwsh.exe
         if which::which("pwsh.exe").is_ok() {
             return Ok(true);
         }
-        
+
         // Check common installation paths
         let paths = [
             r"C:\Program Files\PowerShell\7\pwsh.exe",
             r"C:\Program Files\PowerShell\6\pwsh.exe",
         ];
-        
+
         for path in &paths {
             if std::path::Path::new(path).exists() {
                 return Ok(true);
             }
         }
-        
+
         Ok(false)
     }
-    
+
     /// Get compatibility report
     pub fn get_compatibility_report(&self) -> WindowsCompatibilityReport {
         let mut limitations = Vec::new();
         let mut recommendations = Vec::new();
-        
+
         match self.edition {
             WindowsEdition::Home => {
                 limitations.push("No Group Policy Editor".to_string());
@@ -382,7 +383,7 @@ impl WindowsEditionDetector {
                 limitations.push("No Remote Desktop host".to_string());
                 limitations.push("No Windows Sandbox".to_string());
                 limitations.push("Limited Windows Defender features".to_string());
-                
+
                 recommendations.push("Use Device Encryption instead of BitLocker".to_string());
                 recommendations.push("Use third-party virtualization software".to_string());
                 recommendations.push("Use third-party remote desktop solutions".to_string());
@@ -394,21 +395,22 @@ impl WindowsEditionDetector {
             }
             _ => {}
         }
-        
+
         // WSL-specific recommendations
         if !self.features.has_wsl {
             limitations.push("WSL not available".to_string());
-            recommendations.push("Install WSL from Microsoft Store or enable Windows feature".to_string());
+            recommendations
+                .push("Install WSL from Microsoft Store or enable Windows feature".to_string());
         } else if !self.features.has_wsl2 {
             limitations.push("WSL2 not available".to_string());
             recommendations.push("Update to Windows 10 build 18362 or later".to_string());
         }
-        
+
         // Docker-specific recommendations
         if !self.features.has_docker_desktop {
             recommendations.push("Install Docker Desktop for container support".to_string());
         }
-        
+
         WindowsCompatibilityReport {
             edition: self.edition,
             version: self.version.clone(),
@@ -434,12 +436,24 @@ pub struct WindowsCompatibilityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_edition_parsing() {
-        assert_eq!(WindowsEditionDetector::parse_edition_string("Windows 10 Home"), WindowsEdition::Home);
-        assert_eq!(WindowsEditionDetector::parse_edition_string("Windows 11 Pro"), WindowsEdition::Pro);
-        assert_eq!(WindowsEditionDetector::parse_edition_string("Windows 10 Enterprise"), WindowsEdition::Enterprise);
-        assert_eq!(WindowsEditionDetector::parse_edition_string("Unknown Edition"), WindowsEdition::Unknown);
+        assert_eq!(
+            WindowsEditionDetector::parse_edition_string("Windows 10 Home"),
+            WindowsEdition::Home
+        );
+        assert_eq!(
+            WindowsEditionDetector::parse_edition_string("Windows 11 Pro"),
+            WindowsEdition::Pro
+        );
+        assert_eq!(
+            WindowsEditionDetector::parse_edition_string("Windows 10 Enterprise"),
+            WindowsEdition::Enterprise
+        );
+        assert_eq!(
+            WindowsEditionDetector::parse_edition_string("Unknown Edition"),
+            WindowsEdition::Unknown
+        );
     }
 }

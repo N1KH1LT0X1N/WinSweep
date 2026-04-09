@@ -1,10 +1,10 @@
 //! Poetry package manager cache cleanup
 
-use anyhow::{Result, Context};
+use crate::package_manager::{PackageCleanResult, PackageManager};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
-use crate::package_manager::{PackageManager, PackageCleanResult};
 
 /// Poetry package manager
 pub struct PoetryManager {
@@ -14,9 +14,9 @@ pub struct PoetryManager {
 impl PoetryManager {
     /// Create a new Poetry manager
     pub async fn new() -> Result<Self> {
-        let executable_path = Self::find_poetry_executable()
-            .context("Poetry executable not found")?;
-        
+        let executable_path =
+            Self::find_poetry_executable().context("Poetry executable not found")?;
+
         Ok(Self { executable_path })
     }
 
@@ -48,12 +48,24 @@ impl PoetryManager {
 
     /// Expand environment variables in path
     fn expand_env(path: &str) -> PathBuf {
-        path.replace("%LOCALAPPDATA%", &std::env::var("LOCALAPPDATA").unwrap_or_default())
-            .replace("%APPDATA%", &std::env::var("APPDATA").unwrap_or_default())
-            .replace("%ProgramFiles%", &std::env::var("ProgramFiles").unwrap_or_default())
-            .replace("%ProgramFiles(x86)%", &std::env::var("ProgramFiles(x86)").unwrap_or_default())
-            .replace("%USERPROFILE%", &std::env::var("USERPROFILE").unwrap_or_default())
-            .into()
+        path.replace(
+            "%LOCALAPPDATA%",
+            &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        )
+        .replace("%APPDATA%", &std::env::var("APPDATA").unwrap_or_default())
+        .replace(
+            "%ProgramFiles%",
+            &std::env::var("ProgramFiles").unwrap_or_default(),
+        )
+        .replace(
+            "%ProgramFiles(x86)%",
+            &std::env::var("ProgramFiles(x86)").unwrap_or_default(),
+        )
+        .replace(
+            "%USERPROFILE%",
+            &std::env::var("USERPROFILE").unwrap_or_default(),
+        )
+        .into()
     }
 }
 
@@ -81,7 +93,7 @@ impl PackageManager for PoetryManager {
             .arg("--version")
             .output()
             .await?;
-        
+
         if output.status.success() {
             Ok(String::from_utf8(output.stdout)
                 .ok()
@@ -112,16 +124,16 @@ impl PackageManager for PoetryManager {
 
         // Add default cache locations
         let home_dir = dirs::home_dir().unwrap_or_default();
-        
+
         // Poetry v1.2+ cache location
         paths.push(home_dir.join(".cache").join("pypoetry"));
-        
+
         // Older versions
         paths.push(home_dir.join(".poetry").join("cache"));
-        
+
         // Virtual environments
         paths.push(home_dir.join(".poetry").join("venv"));
-        
+
         // Build cache
         paths.push(home_dir.join(".poetry").join("artifacts"));
 
@@ -138,7 +150,7 @@ impl PackageManager for PoetryManager {
 
     async fn clean_paths(&self, paths: &[PathBuf]) -> Result<PackageCleanResult> {
         info!("Cleaning specific Poetry cache paths: {:?}", paths);
-        
+
         let mut space_freed = 0;
         let mut items_deleted = 0;
         let mut errors = Vec::new();
@@ -179,7 +191,10 @@ impl PackageManager for PoetryManager {
                 cache_info.push(CacheInfo {
                     path: path.clone(),
                     size_bytes: size,
-                    description: format!("Poetry cache: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                    description: format!(
+                        "Poetry cache: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                     can_delete: true,
                 });
             }
@@ -212,7 +227,7 @@ impl PackageManager for PoetryManager {
         // Use Poetry cache clear if available
         if self.is_installed() {
             debug!("Running 'poetry cache clear --all pypi'");
-            
+
             if !dry_run {
                 match Command::new(&self.executable_path)
                     .arg("cache")
@@ -224,8 +239,10 @@ impl PackageManager for PoetryManager {
                 {
                     Ok(output) => {
                         if !output.status.success() {
-                            let error = format!("Poetry cache clear failed: {}", 
-                                String::from_utf8_lossy(&output.stderr));
+                            let error = format!(
+                                "Poetry cache clear failed: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                             warn!("{}", error);
                             errors.push(error);
                         } else {
@@ -276,7 +293,10 @@ impl PackageManager for PoetryManager {
     }
 
     async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
-        info!("Starting Poetry global packages cleanup (dry_run: {})", dry_run);
+        info!(
+            "Starting Poetry global packages cleanup (dry_run: {})",
+            dry_run
+        );
 
         let mut space_freed = 0;
         let mut items_deleted = 0;
@@ -323,7 +343,7 @@ impl PoetryManager {
     /// Calculate directory size recursively
     fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
         let mut total_size = 0;
-        
+
         for entry in walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -334,7 +354,7 @@ impl PoetryManager {
                 }
             }
         }
-        
+
         Ok(total_size)
     }
 
@@ -355,7 +375,7 @@ impl PoetryManager {
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 let (deleted, freed) = Self::delete_directory_contents(&path).await?;
                 files_deleted += deleted;

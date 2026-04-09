@@ -1,5 +1,5 @@
 //! Audit logging for WinSweep operations
-//! 
+//!
 //! This module provides comprehensive audit logging for all WinSweep operations,
 //! including scans, cleanups, and configuration changes.
 
@@ -140,37 +140,42 @@ impl AuditLogger {
     pub fn new() -> Result<Self> {
         let log_dir = winsweep_common::config::get_data_dir();
         std::fs::create_dir_all(&log_dir)?;
-        
+
         let log_file = log_dir.join("audit.log");
-        
+
         // Get current user
         let user = std::env::var("USERNAME").ok();
-        
+
         Ok(Self {
             log_file,
             process_id: std::process::id(),
             user,
         })
     }
-    
+
     /// Log an audit entry
     pub fn log(&self, entry: AuditLogEntry) -> Result<()> {
         debug!("Writing audit log entry: {:?}", entry.operation);
-        
+
         let line = serde_json::to_string(&entry)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_file)?;
-        
+
         writeln!(file, "{}", line)?;
         file.sync_all()?;
-        
+
         Ok(())
     }
-    
+
     /// Log a scan start
-    pub fn log_scan_start(&self, scan_id: Uuid, paths: Vec<PathBuf>, config: &winsweep_common::types::ScanConfig) -> Result<()> {
+    pub fn log_scan_start(
+        &self,
+        scan_id: Uuid,
+        paths: Vec<PathBuf>,
+        config: &winsweep_common::types::ScanConfig,
+    ) -> Result<()> {
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -190,12 +195,18 @@ impl AuditLogger {
                 "max_file_size": config.max_file_size,
             }),
         };
-        
+
         self.log(entry)
     }
-    
+
     /// Log a scan completion
-    pub fn log_scan_complete(&self, scan_id: Uuid, items_found: u64, total_size: u64, duration_ms: u64) -> Result<()> {
+    pub fn log_scan_complete(
+        &self,
+        scan_id: Uuid,
+        items_found: u64,
+        total_size: u64,
+        duration_ms: u64,
+    ) -> Result<()> {
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -212,12 +223,17 @@ impl AuditLogger {
             error_message: None,
             metadata: serde_json::json!({}),
         };
-        
+
         self.log(entry)
     }
-    
+
     /// Log a cleanup start
-    pub fn log_cleanup_start(&self, cleanup_id: Uuid, items: Vec<PathBuf>, use_recycle_bin: bool) -> Result<()> {
+    pub fn log_cleanup_start(
+        &self,
+        cleanup_id: Uuid,
+        items: Vec<PathBuf>,
+        use_recycle_bin: bool,
+    ) -> Result<()> {
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -233,12 +249,16 @@ impl AuditLogger {
             error_message: None,
             metadata: serde_json::json!({}),
         };
-        
+
         self.log(entry)
     }
-    
+
     /// Log a cleanup completion
-    pub fn log_cleanup_complete(&self, cleanup_id: Uuid, result: &winsweep_common::types::CleanupResult) -> Result<()> {
+    pub fn log_cleanup_complete(
+        &self,
+        cleanup_id: Uuid,
+        result: &winsweep_common::types::CleanupResult,
+    ) -> Result<()> {
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -256,12 +276,17 @@ impl AuditLogger {
             error_message: None,
             metadata: serde_json::json!({}),
         };
-        
+
         self.log(entry)
     }
-    
+
     /// Log a file deletion
-    pub fn log_file_deletion(&self, file_path: PathBuf, file_size: u64, moved_to_recycle_bin: bool) -> Result<()> {
+    pub fn log_file_deletion(
+        &self,
+        file_path: PathBuf,
+        file_size: u64,
+        moved_to_recycle_bin: bool,
+    ) -> Result<()> {
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -277,12 +302,17 @@ impl AuditLogger {
             error_message: None,
             metadata: serde_json::json!({}),
         };
-        
+
         self.log(entry)
     }
-    
+
     /// Log a security violation
-    pub fn log_security_violation(&self, violation_type: String, details: String, blocked: bool) -> Result<()> {
+    pub fn log_security_violation(
+        &self,
+        violation_type: String,
+        details: String,
+        blocked: bool,
+    ) -> Result<()> {
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -302,19 +332,19 @@ impl AuditLogger {
             },
             metadata: serde_json::json!({}),
         };
-        
+
         self.log(entry)
     }
-    
+
     /// Read audit log entries
     pub fn read_entries(&self, limit: Option<usize>) -> Result<Vec<AuditLogEntry>> {
         let content = std::fs::read_to_string(&self.log_file)?;
         let mut entries = Vec::new();
-        
+
         for line in content.lines().rev() {
             if let Ok(entry) = serde_json::from_str::<AuditLogEntry>(line) {
                 entries.push(entry);
-                
+
                 if let Some(limit) = limit {
                     if entries.len() >= limit {
                         break;
@@ -322,23 +352,23 @@ impl AuditLogger {
                 }
             }
         }
-        
+
         Ok(entries)
     }
-    
+
     /// Rotate the audit log if it exceeds a certain size
     pub fn rotate_if_needed(&self, max_size_mb: u32) -> Result<()> {
         let metadata = std::fs::metadata(&self.log_file)?;
         let size_mb = metadata.len() / (1024 * 1024);
-        
+
         if size_mb > max_size_mb {
             let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
             let rotated_path = self.log_file.with_extension(format!("log.{}", timestamp));
-            
+
             std::fs::rename(&self.log_file, &rotated_path)?;
             info!("Audit log rotated to {}", rotated_path.display());
         }
-        
+
         Ok(())
     }
 }
@@ -353,12 +383,12 @@ impl Default for AuditLogger {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    
+
     #[test]
     fn test_audit_log_creation() {
         let temp_dir = TempDir::new().unwrap();
         let log_file = temp_dir.path().join("test.log");
-        
+
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -375,7 +405,7 @@ mod tests {
             error_message: None,
             metadata: serde_json::json!({}),
         };
-        
+
         let line = serde_json::to_string(&entry).unwrap();
         assert!(line.contains("ScanStart"));
     }

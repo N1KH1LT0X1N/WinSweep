@@ -1,10 +1,10 @@
 //! Go modules cache cleanup
 
-use anyhow::{Result, Context};
+use crate::package_manager::{PackageCleanResult, PackageManager};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
-use crate::package_manager::{PackageManager, PackageCleanResult};
 
 /// Go modules package manager
 pub struct GoModulesManager {
@@ -14,9 +14,8 @@ pub struct GoModulesManager {
 impl GoModulesManager {
     /// Create a new Go modules manager
     pub async fn new() -> Result<Self> {
-        let executable_path = Self::find_go_executable()
-            .context("Go executable not found")?;
-        
+        let executable_path = Self::find_go_executable().context("Go executable not found")?;
+
         Ok(Self { executable_path })
     }
 
@@ -48,11 +47,23 @@ impl GoModulesManager {
 
     /// Expand environment variables in path
     fn expand_env(path: &str) -> PathBuf {
-        path.replace("%LOCALAPPDATA%", &std::env::var("LOCALAPPDATA").unwrap_or_default())
-            .replace("%ProgramFiles%", &std::env::var("ProgramFiles").unwrap_or_default())
-            .replace("%ProgramFiles(x86)%", &std::env::var("ProgramFiles(x86)").unwrap_or_default())
-            .replace("%USERPROFILE%", &std::env::var("USERPROFILE").unwrap_or_default())
-            .into()
+        path.replace(
+            "%LOCALAPPDATA%",
+            &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        )
+        .replace(
+            "%ProgramFiles%",
+            &std::env::var("ProgramFiles").unwrap_or_default(),
+        )
+        .replace(
+            "%ProgramFiles(x86)%",
+            &std::env::var("ProgramFiles(x86)").unwrap_or_default(),
+        )
+        .replace(
+            "%USERPROFILE%",
+            &std::env::var("USERPROFILE").unwrap_or_default(),
+        )
+        .into()
     }
 }
 
@@ -80,7 +91,7 @@ impl PackageManager for GoModulesManager {
             .arg("version")
             .output()
             .await?;
-        
+
         if output.status.success() {
             let version_str = String::from_utf8(output.stdout)?;
             Ok(Some(
@@ -89,7 +100,7 @@ impl PackageManager for GoModulesManager {
                     .find(|line| line.starts_with("go version"))
                     .and_then(|line| line.split_whitespace().nth(2))
                     .unwrap_or("unknown")
-                    .to_string()
+                    .to_string(),
             ))
         } else {
             Ok(None)
@@ -133,13 +144,13 @@ impl PackageManager for GoModulesManager {
 
         // Add default cache locations
         let home_dir = dirs::home_dir().unwrap_or_default();
-        
+
         // Default module cache
         paths.push(home_dir.join("go").join("pkg").join("mod"));
-        
+
         // Build cache
         paths.push(home_dir.join("go").join("build"));
-        
+
         // Temporary build files
         if let Ok(temp) = std::env::var("TEMP") {
             paths.push(PathBuf::from(temp).join("go-build*"));
@@ -158,7 +169,7 @@ impl PackageManager for GoModulesManager {
 
     async fn clean_paths(&self, paths: &[PathBuf]) -> Result<PackageCleanResult> {
         info!("Cleaning specific Go modules cache paths: {:?}", paths);
-        
+
         let mut space_freed = 0;
         let mut items_deleted = 0;
         let mut errors = Vec::new();
@@ -199,7 +210,10 @@ impl PackageManager for GoModulesManager {
                 cache_info.push(CacheInfo {
                     path: path.clone(),
                     size_bytes: size,
-                    description: format!("Go modules cache: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                    description: format!(
+                        "Go modules cache: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                     can_delete: true,
                 });
             }
@@ -232,7 +246,7 @@ impl PackageManager for GoModulesManager {
         // Use go clean -modcache if available
         if self.is_installed() {
             debug!("Running 'go clean -modcache'");
-            
+
             if !dry_run {
                 match Command::new(&self.executable_path)
                     .arg("clean")
@@ -241,8 +255,10 @@ impl PackageManager for GoModulesManager {
                 {
                     Ok(output) => {
                         if !output.status.success() {
-                            let error = format!("go clean -modcache failed: {}", 
-                                String::from_utf8_lossy(&output.stderr));
+                            let error = format!(
+                                "go clean -modcache failed: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                             warn!("{}", error);
                             errors.push(error);
                         } else {
@@ -265,8 +281,10 @@ impl PackageManager for GoModulesManager {
                 {
                     Ok(output) => {
                         if !output.status.success() {
-                            let error = format!("go clean -cache failed: {}", 
-                                String::from_utf8_lossy(&output.stderr));
+                            let error = format!(
+                                "go clean -cache failed: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                             warn!("{}", error);
                             errors.push(error);
                         } else {
@@ -308,7 +326,11 @@ impl PackageManager for GoModulesManager {
                                             space_freed += freed;
                                         }
                                         Err(e) => {
-                                            errors.push(format!("Failed to clean {}: {}", entry_path.display(), e));
+                                            errors.push(format!(
+                                                "Failed to clean {}: {}",
+                                                entry_path.display(),
+                                                e
+                                            ));
                                         }
                                     }
                                 }
@@ -365,20 +387,12 @@ impl PackageManager for GoModulesManager {
                 String::from_utf8(output.stdout)
                     .ok()
                     .map(|s| PathBuf::from(s.trim()))
-                    .unwrap_or_else(|| {
-                        dirs::home_dir()
-                            .unwrap_or_default()
-                            .join("go")
-                    })
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("go"))
             } else {
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .join("go")
+                dirs::home_dir().unwrap_or_default().join("go")
             }
         } else {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join("go")
+            dirs::home_dir().unwrap_or_default().join("go")
         };
 
         // Clean bin directory
@@ -439,7 +453,7 @@ impl GoModulesManager {
     /// Calculate directory size recursively
     fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
         let mut total_size = 0;
-        
+
         for entry in walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -450,7 +464,7 @@ impl GoModulesManager {
                 }
             }
         }
-        
+
         Ok(total_size)
     }
 
@@ -471,7 +485,7 @@ impl GoModulesManager {
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 let (deleted, freed) = Self::delete_directory_contents(&path).await?;
                 files_deleted += deleted;

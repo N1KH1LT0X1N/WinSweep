@@ -1,13 +1,13 @@
 //! Elevated Operation Coordinator
-//! 
+//!
 //! Handles communication between the GUI (running as user) and elevated backend processes
 //! for operations that require administrator privileges.
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::process::{Command, Child};
+use tokio::process::{Child, Command};
 use tracing::{debug, error, info, warn};
 use winsweep_common::Config;
 
@@ -38,9 +38,7 @@ pub enum ElevatedOperation {
         use_recycle_bin: bool,
     },
     /// Compact WSL VHDX files
-    CompactWslVhdx {
-        distribution_name: Option<String>,
-    },
+    CompactWslVhdx { distribution_name: Option<String> },
 }
 
 /// Service management actions
@@ -101,10 +99,12 @@ impl ElevatedCoordinator {
         // Check if we're already running as administrator
         if self.is_running_as_admin() {
             debug!("Already running as admin, executing directly");
-            self.execute_operation_direct(operation, progress_callback).await
+            self.execute_operation_direct(operation, progress_callback)
+                .await
         } else {
             debug!("Not running as admin, spawning elevated process");
-            self.execute_operation_elevated(operation, progress_callback).await
+            self.execute_operation_elevated(operation, progress_callback)
+                .await
         }
     }
 
@@ -112,12 +112,10 @@ impl ElevatedCoordinator {
     fn is_running_as_admin(&self) -> bool {
         #[cfg(windows)]
         {
-            use windows_sys::Win32::Security::{
-                TOKEN_QUERY, TokenElevation, TOKEN_ELEVATION,
-            };
-            use windows_sys::Win32::Foundation::{HANDLE, FALSE};
-            use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
             use std::mem;
+            use windows_sys::Win32::Foundation::{FALSE, HANDLE};
+            use windows_sys::Win32::Security::{TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+            use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
             unsafe {
                 let mut token: HANDLE = 0;
@@ -127,7 +125,7 @@ impl ElevatedCoordinator {
 
                 let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
                 let mut size = mem::size_of::<TOKEN_ELEVATION>() as u32;
-                
+
                 let result = windows_sys::Win32::Security::GetTokenInformation(
                     token,
                     TokenElevation,
@@ -135,7 +133,7 @@ impl ElevatedCoordinator {
                     size,
                     &mut size,
                 );
-                
+
                 result != FALSE && elevation.TokenIsElevated != 0
             }
         }
@@ -152,23 +150,50 @@ impl ElevatedCoordinator {
         mut progress_callback: impl Fn(ProgressUpdate),
     ) -> Result<ElevatedOperationResult> {
         match operation {
-            ElevatedOperation::CleanWindowsUpdate { remove_downloads, compress_backups, remove_old_versions } => {
-                self.clean_windows_update_direct(remove_downloads, compress_backups, remove_old_versions, &mut progress_callback).await
+            ElevatedOperation::CleanWindowsUpdate {
+                remove_downloads,
+                compress_backups,
+                remove_old_versions,
+            } => {
+                self.clean_windows_update_direct(
+                    remove_downloads,
+                    compress_backups,
+                    remove_old_versions,
+                    &mut progress_callback,
+                )
+                .await
             }
-            ElevatedOperation::CleanSystemTemp { include_user_temp, include_system_temp } => {
-                self.clean_system_temp_direct(include_user_temp, include_system_temp, &mut progress_callback).await
+            ElevatedOperation::CleanSystemTemp {
+                include_user_temp,
+                include_system_temp,
+            } => {
+                self.clean_system_temp_direct(
+                    include_user_temp,
+                    include_system_temp,
+                    &mut progress_callback,
+                )
+                .await
             }
             ElevatedOperation::CleanPrefetch => {
                 self.clean_prefetch_direct(&mut progress_callback).await
             }
-            ElevatedOperation::ManageService { service_name, action } => {
-                self.manage_service_direct(&service_name, action, &mut progress_callback).await
+            ElevatedOperation::ManageService {
+                service_name,
+                action,
+            } => {
+                self.manage_service_direct(&service_name, action, &mut progress_callback)
+                    .await
             }
-            ElevatedOperation::DeleteSystemFiles { paths, use_recycle_bin } => {
-                self.delete_system_files_direct(paths, use_recycle_bin, &mut progress_callback).await
+            ElevatedOperation::DeleteSystemFiles {
+                paths,
+                use_recycle_bin,
+            } => {
+                self.delete_system_files_direct(paths, use_recycle_bin, &mut progress_callback)
+                    .await
             }
             ElevatedOperation::CompactWslVhdx { distribution_name } => {
-                self.compact_wsl_vhdx_direct(distribution_name, &mut progress_callback).await
+                self.compact_wsl_vhdx_direct(distribution_name, &mut progress_callback)
+                    .await
             }
         }
     }
@@ -184,16 +209,17 @@ impl ElevatedCoordinator {
         let request_id = uuid::Uuid::new_v4().to_string();
         let request_file = temp_dir.join(format!("winsweep_request_{}.json", request_id));
         let response_file = temp_dir.join(format!("winsweep_response_{}.json", request_id));
-        
+
         // Write operation to request file
-        let operation_json = serde_json::to_string(&operation)
-            .context("Failed to serialize operation")?;
-        tokio::fs::write(&request_file, operation_json).await
+        let operation_json =
+            serde_json::to_string(&operation).context("Failed to serialize operation")?;
+        tokio::fs::write(&request_file, operation_json)
+            .await
             .context("Failed to write request file")?;
-        
+
         // Start the elevated helper with file paths
-        let helper_path = std::env::current_exe()
-            .context("Failed to get current executable path")?;
+        let helper_path =
+            std::env::current_exe().context("Failed to get current executable path")?;
 
         let mut child = Command::new("powershell")
             .arg("-Command")
@@ -205,25 +231,32 @@ impl ElevatedCoordinator {
             .context("Failed to spawn elevated process")?;
 
         // Wait for process to complete
-        let status = child.wait()
+        let status = child
+            .wait()
             .context("Failed to wait for elevated process")?;
 
         // Read response file
         let result = if status.success() {
             // Wait a moment for the response file to be written
             tokio::time::sleep(Duration::from_millis(100)).await;
-            
+
             if response_file.exists() {
-                let response_json = tokio::fs::read_to_string(&response_file).await
+                let response_json = tokio::fs::read_to_string(&response_file)
+                    .await
                     .context("Failed to read response file")?;
-                
+
                 serde_json::from_str::<ElevatedOperationResult>(&response_json)
                     .context("Failed to parse elevated operation result")
             } else {
-                Err(anyhow::anyhow!("Elevated process did not create response file"))
+                Err(anyhow::anyhow!(
+                    "Elevated process did not create response file"
+                ))
             }
         } else {
-            Err(anyhow::anyhow!("Elevated process failed with exit code: {:?}", status.code()))
+            Err(anyhow::anyhow!(
+                "Elevated process failed with exit code: {:?}",
+                status.code()
+            ))
         };
 
         // Clean up temporary files
@@ -261,7 +294,9 @@ impl ElevatedCoordinator {
 
         if remove_downloads {
             let download_path = PathBuf::from(r"C:\Windows\SoftwareDistribution\Download");
-            if let Ok((deleted, freed)) = self.delete_directory_contents(&download_path, false).await {
+            if let Ok((deleted, freed)) =
+                self.delete_directory_contents(&download_path, false).await
+            {
                 files_deleted += deleted;
                 space_freed += freed;
             }
@@ -291,8 +326,12 @@ impl ElevatedCoordinator {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     if let Some(name_str) = name.to_str() {
-                        if name_str.starts_with("$NtUninstall") || name_str.starts_with("SoftwareDistribution") {
-                            if let Ok((deleted, freed)) = self.delete_directory_contents(&entry.path(), false).await {
+                        if name_str.starts_with("$NtUninstall")
+                            || name_str.starts_with("SoftwareDistribution")
+                        {
+                            if let Ok((deleted, freed)) =
+                                self.delete_directory_contents(&entry.path(), false).await
+                            {
                                 files_deleted += deleted;
                                 space_freed += freed;
                             }
@@ -353,7 +392,9 @@ impl ElevatedCoordinator {
                 for user_entry in users_path.flatten() {
                     let temp_path = user_entry.path().join("AppData\\Local\\Temp");
                     if temp_path.exists() {
-                        if let Ok((deleted, freed)) = self.delete_directory_contents(&temp_path, true).await {
+                        if let Ok((deleted, freed)) =
+                            self.delete_directory_contents(&temp_path, true).await
+                        {
                             files_deleted += deleted;
                             space_freed += freed;
                         }
@@ -372,7 +413,9 @@ impl ElevatedCoordinator {
 
             let system_temp = PathBuf::from("C:\\Windows\\Temp");
             if system_temp.exists() {
-                if let Ok((deleted, freed)) = self.delete_directory_contents(&system_temp, true).await {
+                if let Ok((deleted, freed)) =
+                    self.delete_directory_contents(&system_temp, true).await
+                {
                     files_deleted += deleted;
                     space_freed += freed;
                 }
@@ -411,7 +454,9 @@ impl ElevatedCoordinator {
 
         let prefetch_path = PathBuf::from("C:\\Windows\\Prefetch");
         let (files_deleted, space_freed) = if prefetch_path.exists() {
-            self.delete_directory_contents(&prefetch_path, false).await.unwrap_or((0, 0))
+            self.delete_directory_contents(&prefetch_path, false)
+                .await
+                .unwrap_or((0, 0))
         } else {
             (0, 0)
         };
@@ -501,7 +546,9 @@ impl ElevatedCoordinator {
             });
 
             if path.is_dir() {
-                let (deleted, freed) = self.delete_directory_contents(path, use_recycle_bin).await?;
+                let (deleted, freed) = self
+                    .delete_directory_contents(path, use_recycle_bin)
+                    .await?;
                 files_deleted += deleted;
                 space_freed += freed;
             } else if path.is_file() {
@@ -543,10 +590,7 @@ impl ElevatedCoordinator {
         });
 
         // Shutdown WSL
-        let _ = Command::new("wsl")
-            .arg("--shutdown")
-            .output()
-            .await;
+        let _ = Command::new("wsl").arg("--shutdown").output().await;
 
         progress_callback(ProgressUpdate {
             percentage: 40,
@@ -556,9 +600,9 @@ impl ElevatedCoordinator {
 
         // Find VHDX files
         let mut vhdx_files = Vec::new();
-        let wsl_base = PathBuf::from("C:\\Users").join(
-            std::env::var("USERNAME").unwrap_or_else(|_| "Default".to_string())
-        ).join("AppData\\Local\\Packages");
+        let wsl_base = PathBuf::from("C:\\Users")
+            .join(std::env::var("USERNAME").unwrap_or_else(|_| "Default".to_string()))
+            .join("AppData\\Local\\Packages");
 
         if let Ok(entries) = std::fs::read_dir(&wsl_base) {
             for entry in entries.flatten() {
@@ -636,7 +680,11 @@ impl ElevatedCoordinator {
             .await?;
 
         if !output.status.success() {
-            warn!("Failed to stop service {}: {}", service_name, String::from_utf8_lossy(&output.stderr));
+            warn!(
+                "Failed to stop service {}: {}",
+                service_name,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         Ok(())
     }
@@ -650,7 +698,11 @@ impl ElevatedCoordinator {
             .await?;
 
         if !output.status.success() {
-            warn!("Failed to start service {}: {}", service_name, String::from_utf8_lossy(&output.stderr));
+            warn!(
+                "Failed to start service {}: {}",
+                service_name,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         Ok(())
     }
@@ -665,7 +717,11 @@ impl ElevatedCoordinator {
             .await?;
 
         if !output.status.success() {
-            warn!("Failed to disable service {}: {}", service_name, String::from_utf8_lossy(&output.stderr));
+            warn!(
+                "Failed to disable service {}: {}",
+                service_name,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         Ok(())
     }
@@ -680,7 +736,11 @@ impl ElevatedCoordinator {
             .await?;
 
         if !output.status.success() {
-            warn!("Failed to enable service {}: {}", service_name, String::from_utf8_lossy(&output.stderr));
+            warn!(
+                "Failed to enable service {}: {}",
+                service_name,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         Ok(())
     }
@@ -698,10 +758,12 @@ impl ElevatedCoordinator {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
                 if entry_path.is_dir() {
-                    let (deleted, freed) = self.delete_directory_contents(&entry_path, use_recycle_bin).await?;
+                    let (deleted, freed) = self
+                        .delete_directory_contents(&entry_path, use_recycle_bin)
+                        .await?;
                     files_deleted += deleted;
                     space_freed += freed;
-                    
+
                     // Remove the empty directory
                     std::fs::remove_dir(&entry_path).ok();
                 } else {

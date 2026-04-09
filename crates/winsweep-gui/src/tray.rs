@@ -5,8 +5,8 @@ use eframe::egui;
 use std::sync::mpsc;
 use tracing::{debug, error, info};
 use tray_icon::{
-    menu::{Menu, MenuItem, MenuEvent, PredefinedMenuItem},
-    TrayIcon, Icon,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    Icon, TrayIcon,
 };
 
 /// System tray manager
@@ -24,7 +24,7 @@ struct MenuChannel {
 impl MenuChannel {
     fn new(event_tx: mpsc::Sender<TrayEvent>) -> Result<Self> {
         let receiver = MenuEvent::receiver();
-        
+
         // Spawn a thread to handle menu events
         let _receiver_clone = receiver.clone();
         std::thread::spawn(move || {
@@ -49,7 +49,7 @@ impl MenuChannel {
                 }
             }
         });
-        
+
         Ok(Self {
             _receiver: receiver,
         })
@@ -63,7 +63,7 @@ fn create_default_icon() -> Result<Icon> {
     let width = 16;
     let height = 16;
     let rgba = vec![0; (width * height * 4) as usize]; // Transparent icon
-    
+
     Icon::from_rgba(rgba, width as u32, height as u32).map_err(Into::into)
 }
 
@@ -84,7 +84,7 @@ impl TrayManager {
     /// Create a new system tray manager
     pub fn new() -> Result<Self> {
         let (event_tx, event_rx) = mpsc::channel();
-        
+
         // Create tray menu items with IDs
         let show_item = MenuItem::new("Show WinSweep", true, Some("show".into()));
         let quick_scan_item = MenuItem::new("Quick Scan", true, Some("quick_scan".into()));
@@ -93,7 +93,7 @@ impl TrayManager {
         let settings_item = MenuItem::new("Settings", true, Some("settings".into()));
         let about_item = MenuItem::new("About", true, Some("about".into()));
         let quit_item = MenuItem::new("Quit", true, Some("quit".into()));
-        
+
         // Create menu with items
         let menu = Menu::with_items(&[
             &show_item,
@@ -107,10 +107,10 @@ impl TrayManager {
             &PredefinedMenuItem::separator(),
             &quit_item,
         ])?;
-        
+
         // Set up menu event handler
         let menu_channel = MenuChannel::new(event_tx.clone())?;
-        
+
         // Create tray icon with a simple icon (placeholder)
         let icon = create_default_icon()?;
         let tray_icon = tray_icon::TrayIconBuilder::new()
@@ -118,19 +118,19 @@ impl TrayManager {
             .with_tooltip("WinSweep - Disk Cleaning Tool")
             .with_icon(icon)
             .build()?;
-        
+
         Ok(Self {
             tray_icon: Some(tray_icon),
             event_rx,
             _menu_channel: Some(menu_channel),
         })
     }
-    
+
     /// Get the next tray event
     pub fn next_event(&self) -> Option<TrayEvent> {
         self.event_rx.try_recv().ok()
     }
-    
+
     /// Update tray icon based on operation status
     pub fn update_status(&mut self, is_busy: bool) -> Result<()> {
         if let Some(ref mut tray_icon) = self.tray_icon {
@@ -144,7 +144,7 @@ impl TrayManager {
         }
         Ok(())
     }
-    
+
     /// Show balloon notification
     pub fn show_notification(&mut self, title: &str, message: &str) -> Result<()> {
         if let Some(ref mut tray_icon) = self.tray_icon {
@@ -154,7 +154,7 @@ impl TrayManager {
         }
         Ok(())
     }
-    
+
     /// Hide the system tray
     pub fn hide(&mut self) -> Result<()> {
         if let Some(tray_icon) = self.tray_icon.take() {
@@ -169,4 +169,3 @@ impl Drop for TrayManager {
         let _ = self.hide();
     }
 }
-

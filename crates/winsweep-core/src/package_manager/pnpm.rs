@@ -1,10 +1,10 @@
 //! pnpm package manager cache cleanup
 
-use anyhow::{Result, Context};
+use crate::package_manager::{PackageCleanResult, PackageManager};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
-use crate::package_manager::{PackageManager, PackageCleanResult};
 
 /// pnpm package manager
 pub struct PnpmManager {
@@ -14,9 +14,8 @@ pub struct PnpmManager {
 impl PnpmManager {
     /// Create a new pnpm manager
     pub async fn new() -> Result<Self> {
-        let executable_path = Self::find_pnpm_executable()
-            .context("pnpm executable not found")?;
-        
+        let executable_path = Self::find_pnpm_executable().context("pnpm executable not found")?;
+
         Ok(Self { executable_path })
     }
 
@@ -47,11 +46,20 @@ impl PnpmManager {
 
     /// Expand environment variables in path
     fn expand_env(path: &str) -> PathBuf {
-        path.replace("%LOCALAPPDATA%", &std::env::var("LOCALAPPDATA").unwrap_or_default())
-            .replace("%APPDATA%", &std::env::var("APPDATA").unwrap_or_default())
-            .replace("%ProgramFiles%", &std::env::var("ProgramFiles").unwrap_or_default())
-            .replace("%ProgramFiles(x86)%", &std::env::var("ProgramFiles(x86)").unwrap_or_default())
-            .into()
+        path.replace(
+            "%LOCALAPPDATA%",
+            &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        )
+        .replace("%APPDATA%", &std::env::var("APPDATA").unwrap_or_default())
+        .replace(
+            "%ProgramFiles%",
+            &std::env::var("ProgramFiles").unwrap_or_default(),
+        )
+        .replace(
+            "%ProgramFiles(x86)%",
+            &std::env::var("ProgramFiles(x86)").unwrap_or_default(),
+        )
+        .into()
     }
 }
 
@@ -79,7 +87,7 @@ impl PackageManager for PnpmManager {
             .arg("--version")
             .output()
             .await?;
-        
+
         if output.status.success() {
             Ok(String::from_utf8(output.stdout)
                 .ok()
@@ -111,11 +119,11 @@ impl PackageManager for PnpmManager {
 
         // Add default cache locations
         let home_dir = dirs::home_dir().unwrap_or_default();
-        
+
         // pnpm global cache
         paths.push(home_dir.join(".pnpm-store"));
         paths.push(home_dir.join(".pnpm-cache"));
-        
+
         // Local cache
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             paths.push(PathBuf::from(local_app_data).join("pnpm"));
@@ -139,7 +147,7 @@ impl PackageManager for PnpmManager {
 
     async fn clean_paths(&self, paths: &[PathBuf]) -> Result<PackageCleanResult> {
         info!("Cleaning specific pnpm cache paths: {:?}", paths);
-        
+
         let mut space_freed = 0;
         let mut items_deleted = 0;
         let mut errors = Vec::new();
@@ -180,7 +188,10 @@ impl PackageManager for PnpmManager {
                 cache_info.push(CacheInfo {
                     path: path.clone(),
                     size_bytes: size,
-                    description: format!("pnpm cache: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                    description: format!(
+                        "pnpm cache: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                     can_delete: true,
                 });
             }
@@ -213,7 +224,7 @@ impl PackageManager for PnpmManager {
         // Use pnpm store prune if available
         if self.is_installed().await {
             debug!("Running 'pnpm store prune'");
-            
+
             if dry_run {
                 // For dry run, just calculate what would be deleted
                 let cache_paths = self.get_cache_paths().await?;
@@ -232,8 +243,10 @@ impl PackageManager for PnpmManager {
                 {
                     Ok(output) => {
                         if !output.status.success() {
-                            let error = format!("pnpm store prune failed: {}", 
-                                String::from_utf8_lossy(&output.stderr));
+                            let error = format!(
+                                "pnpm store prune failed: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                             warn!("{}", error);
                             errors.push(error);
                         } else {
@@ -284,7 +297,10 @@ impl PackageManager for PnpmManager {
     }
 
     async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
-        info!("Starting pnpm global packages cleanup (dry_run: {})", dry_run);
+        info!(
+            "Starting pnpm global packages cleanup (dry_run: {})",
+            dry_run
+        );
 
         let mut space_freed = 0;
         let mut items_deleted = 0;
@@ -300,7 +316,7 @@ impl PackageManager for PnpmManager {
             if output.status.success() {
                 if let Ok(root_path) = String::from_utf8(output.stdout) {
                     let global_modules = PathBuf::from(root_path.trim()).join("node_modules");
-                    
+
                     if global_modules.exists() {
                         if dry_run {
                             if let Ok(size) = Self::calculate_directory_size(&global_modules) {
@@ -339,7 +355,7 @@ impl PnpmManager {
     /// Calculate directory size recursively
     fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
         let mut total_size = 0;
-        
+
         for entry in walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -350,7 +366,7 @@ impl PnpmManager {
                 }
             }
         }
-        
+
         Ok(total_size)
     }
 
@@ -371,7 +387,7 @@ impl PnpmManager {
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 let (deleted, freed) = Self::delete_directory_contents(&path).await?;
                 files_deleted += deleted;

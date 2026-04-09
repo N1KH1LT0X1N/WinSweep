@@ -1,21 +1,23 @@
 //! View model layer for WinSweep GUI
-//! 
+//!
 //! This module contains the view models that separate the UI logic from the business logic.
 
 mod dashboard;
-mod scan;
-mod wsl;
 mod docker;
 mod package_managers;
-mod windows_update;
+mod scan;
 mod services;
 mod settings;
+mod windows_update;
+mod wsl;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use winsweep_core::{WindowsEditionDetector, WslDetector, HomeEditionCompat, DockerClient, PackageManagerRegistry};
 use winsweep_common::Config;
+use winsweep_core::{
+    DockerClient, HomeEditionCompat, PackageManagerRegistry, WindowsEditionDetector, WslDetector,
+};
 
 /// Main view model for the WinSweep application
 #[derive(Serialize, Deserialize)]
@@ -112,43 +114,43 @@ impl WinSweepViewModel {
             settings: settings::SettingsViewModel::new(config),
         }
     }
-    
+
     /// Get the current navigation view
     pub fn current_view(&self) -> NavigationView {
         self.current_view
     }
-    
+
     /// Set the current navigation view
     pub fn set_current_view(&mut self, view: NavigationView) {
         self.current_view = view;
         self.set_status_message(None);
     }
-    
+
     /// Get the status message
     pub fn status_message(&self) -> Option<&str> {
         self.status_message.as_deref()
     }
-    
+
     /// Set the status message
     pub fn set_status_message(&mut self, message: Option<String>) {
         self.status_message = message;
     }
-    
+
     /// Get the operation progress
     pub fn operation_progress(&self) -> Option<f32> {
         self.operation_progress
     }
-    
+
     /// Set the operation progress
     pub fn set_operation_progress(&mut self, progress: Option<f32>) {
         self.operation_progress = progress;
     }
-    
+
     /// Check if an operation is running
     pub fn is_operation_running(&self) -> bool {
         self.operation_running
     }
-    
+
     /// Set whether an operation is running
     pub fn set_operation_running(&mut self, running: bool) {
         self.operation_running = running;
@@ -156,14 +158,14 @@ impl WinSweepViewModel {
             self.operation_progress = None;
         }
     }
-    
+
     /// Update the view model (called every frame)
     pub fn update(&mut self, ctx: &egui::Context) {
         // Request repaint if needed
         if self.operation_running {
             ctx.request_repaint();
         }
-        
+
         // Update sub-view models
         self.dashboard.update();
         self.scan.update();
@@ -173,39 +175,39 @@ impl WinSweepViewModel {
         self.windows_update.update();
         self.services.update();
         self.settings.update();
-        
+
         self.last_update = Instant::now();
     }
-    
+
     /// Getters for core components
     pub fn windows_detector(&self) -> Option<&WindowsEditionDetector> {
         self.windows_detector.as_ref()
     }
-    
+
     pub fn wsl_detector(&self) -> Option<&WslDetector> {
         self.wsl_detector.as_ref()
     }
-    
+
     pub fn home_edition_compat(&self) -> Option<&HomeEditionCompat> {
         self.home_edition_compat.as_ref()
     }
-    
+
     pub fn docker_client(&self) -> Option<&DockerClient> {
         self.docker_client.as_ref()
     }
-    
+
     pub fn docker_client_mut(&mut self) -> Option<&mut DockerClient> {
         self.docker_client.as_mut()
     }
-    
+
     pub fn package_manager_registry(&self) -> &PackageManagerRegistry {
         &self.package_manager_registry
     }
-    
+
     pub fn config(&self) -> &Config {
         &self.config
     }
-    
+
     pub fn config_mut(&mut self) -> &mut Config {
         &mut self.config
     }
@@ -213,10 +215,10 @@ impl WinSweepViewModel {
 
 // Re-export sub-modules
 pub use dashboard::*;
-pub use scan::*;
-pub use wsl::*;
 pub use docker::*;
 pub use package_managers::*;
-pub use windows_update::*;
+pub use scan::*;
 pub use services::*;
 pub use settings::*;
+pub use windows_update::*;
+pub use wsl::*;

@@ -1,7 +1,7 @@
 //! WSL view model
 
 use serde::{Deserialize, Serialize};
-use winsweep_core::{WslDetector, WslDistribution, WslVersion, WslState};
+use winsweep_core::{WslDetector, WslDistribution, WslState, WslVersion};
 
 /// WSL view model
 #[derive(Serialize, Deserialize)]
@@ -39,16 +39,16 @@ impl WslViewModel {
             status_message: None,
         }
     }
-    
+
     /// Update the WSL view model
     pub fn update(&mut self) {
         // TODO: Update distribution status
     }
-    
+
     /// Refresh distributions
     pub fn refresh_distributions(&mut self, wsl_detector: &WslDetector) {
         self.distributions.clear();
-        
+
         for (name, _) in wsl_detector.distributions() {
             if let Ok(dist) = wsl_detector.get_distribution(name) {
                 self.distributions.push(WslDistInfo {
@@ -61,18 +61,19 @@ impl WslViewModel {
             }
         }
     }
-    
+
     /// Start compacting selected distribution
     pub fn start_compact(&mut self) {
         if let Some(index) = self.selected_distribution {
             if index < self.distributions.len() {
                 self.compact_in_progress = true;
                 self.compact_progress = 0.0;
-                self.status_message = Some(format!("Compacting {}...", self.distributions[index].name));
+                self.status_message =
+                    Some(format!("Compacting {}...", self.distributions[index].name));
             }
         }
     }
-    
+
     /// Stop compacting
     pub fn stop_compact(&mut self) {
         self.compact_in_progress = false;

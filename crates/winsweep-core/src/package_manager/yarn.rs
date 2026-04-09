@@ -1,10 +1,10 @@
 //! Yarn package manager cache cleanup
 
-use anyhow::{Result, Context};
+use crate::package_manager::{PackageCleanResult, PackageManager};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
-use crate::package_manager::{PackageManager, PackageCleanResult};
 
 /// Yarn package manager
 pub struct YarnManager {
@@ -15,13 +15,15 @@ pub struct YarnManager {
 impl YarnManager {
     /// Create a new Yarn manager
     pub async fn new() -> Result<Self> {
-        let executable_path = Self::find_yarn_executable()
-            .context("Yarn executable not found")?;
-        
+        let executable_path = Self::find_yarn_executable().context("Yarn executable not found")?;
+
         // Check if it's Yarn Berry (v2+) or Classic (v1)
         let is_berry = Self::detect_yarn_version(&executable_path).await;
-        
-        Ok(Self { executable_path, is_berry })
+
+        Ok(Self {
+            executable_path,
+            is_berry,
+        })
     }
 
     /// Find Yarn executable
@@ -51,15 +53,13 @@ impl YarnManager {
 
     /// Detect if this is Yarn Berry (v2+) or Classic (v1)
     async fn detect_yarn_version(executable: &PathBuf) -> bool {
-        if let Ok(output) = Command::new(executable)
-            .arg("--version")
-            .output()
-            .await
-        {
+        if let Ok(output) = Command::new(executable).arg("--version").output().await {
             if output.status.success() {
                 if let Ok(version) = String::from_utf8(output.stdout) {
                     // Yarn Berry versions start with 2, 3, 4, etc.
-                    return version.starts_with('2') || version.starts_with('3') || version.starts_with('4');
+                    return version.starts_with('2')
+                        || version.starts_with('3')
+                        || version.starts_with('4');
                 }
             }
         }
@@ -68,11 +68,20 @@ impl YarnManager {
 
     /// Expand environment variables in path
     fn expand_env(path: &str) -> PathBuf {
-        path.replace("%LOCALAPPDATA%", &std::env::var("LOCALAPPDATA").unwrap_or_default())
-            .replace("%APPDATA%", &std::env::var("APPDATA").unwrap_or_default())
-            .replace("%ProgramFiles%", &std::env::var("ProgramFiles").unwrap_or_default())
-            .replace("%ProgramFiles(x86)%", &std::env::var("ProgramFiles(x86)").unwrap_or_default())
-            .into()
+        path.replace(
+            "%LOCALAPPDATA%",
+            &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        )
+        .replace("%APPDATA%", &std::env::var("APPDATA").unwrap_or_default())
+        .replace(
+            "%ProgramFiles%",
+            &std::env::var("ProgramFiles").unwrap_or_default(),
+        )
+        .replace(
+            "%ProgramFiles(x86)%",
+            &std::env::var("ProgramFiles(x86)").unwrap_or_default(),
+        )
+        .into()
     }
 }
 
@@ -104,7 +113,7 @@ impl PackageManager for YarnManager {
             .arg("--version")
             .output()
             .await?;
-        
+
         if output.status.success() {
             Ok(String::from_utf8(output.stdout)
                 .ok()
@@ -120,10 +129,10 @@ impl PackageManager for YarnManager {
         if self.is_berry {
             // Yarn Berry cache locations
             let home_dir = dirs::home_dir().unwrap_or_default();
-            
+
             // Global cache
             paths.push(home_dir.join(".yarn/berry/cache"));
-            
+
             // Check for custom cache dir
             if let Ok(output) = Command::new(&self.executable_path)
                 .arg("config")
@@ -140,22 +149,22 @@ impl PackageManager for YarnManager {
                     }
                 }
             }
-            
+
             // Zero-install cache
             paths.push(home_dir.join(".yarn/berry/linker"));
             paths.push(home_dir.join(".yarn/berry/releases"));
         } else {
             // Yarn Classic cache locations
             let home_dir = dirs::home_dir().unwrap_or_default();
-            
+
             // Global cache
             paths.push(home_dir.join(".yarn-cache"));
-            
+
             // Local cache
             if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
                 paths.push(PathBuf::from(app_data).join("Yarn\\Cache"));
             }
-            
+
             // Temporary files
             if let Ok(temp) = std::env::var("TEMP") {
                 paths.push(PathBuf::from(temp).join("yarn-*"));
@@ -175,7 +184,7 @@ impl PackageManager for YarnManager {
 
     async fn clean_paths(&self, paths: &[PathBuf]) -> Result<PackageCleanResult> {
         info!("Cleaning specific Yarn cache paths: {:?}", paths);
-        
+
         let mut space_freed = 0;
         let mut items_deleted = 0;
         let mut errors = Vec::new();
@@ -216,7 +225,10 @@ impl PackageManager for YarnManager {
                 cache_info.push(CacheInfo {
                     path: path.clone(),
                     size_bytes: size,
-                    description: format!("Yarn cache: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                    description: format!(
+                        "Yarn cache: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                     can_delete: true,
                 });
             }
@@ -239,8 +251,11 @@ impl PackageManager for YarnManager {
     }
 
     async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
-        info!("Starting Yarn cache cleanup (dry_run: {}, version: {})", 
-            dry_run, if self.is_berry { "Berry" } else { "Classic" });
+        info!(
+            "Starting Yarn cache cleanup (dry_run: {}, version: {})",
+            dry_run,
+            if self.is_berry { "Berry" } else { "Classic" }
+        );
 
         let mut space_freed = 0;
         let mut items_deleted = 0;
@@ -250,7 +265,7 @@ impl PackageManager for YarnManager {
         if self.is_berry {
             // Yarn Berry: Use yarn cache clean
             debug!("Running 'yarn cache clean --all'");
-            
+
             if !dry_run {
                 match Command::new(&self.executable_path)
                     .arg("cache")
@@ -260,8 +275,10 @@ impl PackageManager for YarnManager {
                 {
                     Ok(output) => {
                         if !output.status.success() {
-                            let error = format!("Yarn cache clean failed: {}", 
-                                String::from_utf8_lossy(&output.stderr));
+                            let error = format!(
+                                "Yarn cache clean failed: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                             warn!("{}", error);
                             errors.push(error);
                         } else {
@@ -278,7 +295,7 @@ impl PackageManager for YarnManager {
         } else {
             // Yarn Classic: Use yarn cache clean
             debug!("Running 'yarn cache clean'");
-            
+
             if !dry_run {
                 match Command::new(&self.executable_path)
                     .arg("cache")
@@ -287,8 +304,10 @@ impl PackageManager for YarnManager {
                 {
                     Ok(output) => {
                         if !output.status.success() {
-                            let error = format!("Yarn cache clean failed: {}", 
-                                String::from_utf8_lossy(&output.stderr));
+                            let error = format!(
+                                "Yarn cache clean failed: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                             warn!("{}", error);
                             errors.push(error);
                         } else {
@@ -339,7 +358,10 @@ impl PackageManager for YarnManager {
     }
 
     async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
-        info!("Starting Yarn global packages cleanup (dry_run: {})", dry_run);
+        info!(
+            "Starting Yarn global packages cleanup (dry_run: {})",
+            dry_run
+        );
 
         let mut space_freed = 0;
         let mut items_deleted = 0;
@@ -389,7 +411,7 @@ impl YarnManager {
     /// Calculate directory size recursively
     fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
         let mut total_size = 0;
-        
+
         for entry in walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -400,7 +422,7 @@ impl YarnManager {
                 }
             }
         }
-        
+
         Ok(total_size)
     }
 
@@ -421,7 +443,7 @@ impl YarnManager {
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 let (deleted, freed) = Self::delete_directory_contents(&path).await?;
                 files_deleted += deleted;

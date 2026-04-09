@@ -37,44 +37,44 @@ pub enum ProjectType {
     Vue,
     Angular,
     Svelte,
-    
+
     // Rust
     Rust,
-    
+
     // Python
     Python,
     Django,
     Flask,
     FastAPI,
-    
+
     // Java
     Java,
     Maven,
     Gradle,
-    
+
     // Go
     Go,
-    
+
     // C/C++
     Cpp,
     CMake,
-    
+
     // .NET
     DotNet,
-    
+
     // Ruby
     Ruby,
     Rails,
-    
+
     // PHP
     Php,
     Laravel,
-    
+
     // Mobile
     Android,
     Flutter,
     ReactNative,
-    
+
     // Infrastructure
     Docker,
     Kubernetes,
@@ -82,15 +82,15 @@ pub enum ProjectType {
     Ansible,
     Packer,
     Vagrant,
-    
+
     // Data
     Jupyter,
     R,
-    
+
     // Game Development
     Unity,
     Unreal,
-    
+
     // Other
     Git,
     Hg,
@@ -112,7 +112,7 @@ pub struct CleanupResult {
 #[serde(tag = "type")]
 pub enum IpcMessage {
     /// Start a scan request
-    StartScan { 
+    StartScan {
         paths: Vec<PathBuf>,
         include_hidden: bool,
         follow_symlinks: bool,

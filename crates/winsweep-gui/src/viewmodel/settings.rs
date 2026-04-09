@@ -46,12 +46,12 @@ impl SettingsViewModel {
             status_message: None,
         }
     }
-    
+
     /// Update the settings view model
     pub fn update(&mut self) {
         // TODO: Update settings if needed
     }
-    
+
     /// Save settings
     pub fn save_settings(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Save configuration
@@ -59,24 +59,24 @@ impl SettingsViewModel {
         self.status_message = Some("Settings saved successfully".to_string());
         Ok(())
     }
-    
+
     /// Reset to defaults
     pub fn reset_to_defaults(&mut self) {
         // TODO: Reset configuration to defaults
         self.has_unsaved_changes = true;
         self.status_message = Some("Settings reset to defaults".to_string());
     }
-    
+
     /// Get configuration reference
     pub fn config(&self) -> &Config {
         &self.config
     }
-    
+
     /// Get configuration mutable reference
     pub fn config_mut(&mut self) -> &mut Config {
         &mut self.config
     }
-    
+
     /// Mark as having unsaved changes
     pub fn mark_dirty(&mut self) {
         self.has_unsaved_changes = true;
