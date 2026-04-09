@@ -139,6 +139,7 @@ impl PackageManager for YarnManager {
                 .arg("get")
                 .arg("cacheFolder")
                 .output()
+                .await
             {
                 if output.status.success() {
                     if let Ok(cache_path) = String::from_utf8(output.stdout) {
@@ -272,6 +273,7 @@ impl PackageManager for YarnManager {
                     .arg("clean")
                     .arg("--all")
                     .output()
+                    .await
                 {
                     Ok(output) => {
                         if !output.status.success() {
@@ -301,6 +303,7 @@ impl PackageManager for YarnManager {
                     .arg("cache")
                     .arg("clean")
                     .output()
+                    .await
                 {
                     Ok(output) => {
                         if !output.status.success() {

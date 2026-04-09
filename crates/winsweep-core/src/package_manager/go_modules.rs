@@ -115,6 +115,7 @@ impl PackageManager for GoModulesManager {
             .arg("env")
             .arg("GOCACHE")
             .output()
+            .await
         {
             if output.status.success() {
                 if let Ok(cache_path) = String::from_utf8(output.stdout) {
@@ -131,6 +132,7 @@ impl PackageManager for GoModulesManager {
             .arg("env")
             .arg("GOMODCACHE")
             .output()
+            .await
         {
             if output.status.success() {
                 if let Ok(mod_cache_path) = String::from_utf8(output.stdout) {
@@ -252,6 +254,7 @@ impl PackageManager for GoModulesManager {
                     .arg("clean")
                     .arg("-modcache")
                     .output()
+                    .await
                 {
                     Ok(output) => {
                         if !output.status.success() {
@@ -278,6 +281,7 @@ impl PackageManager for GoModulesManager {
                     .arg("clean")
                     .arg("-cache")
                     .output()
+                    .await
                 {
                     Ok(output) => {
                         if !output.status.success() {
@@ -382,6 +386,7 @@ impl PackageManager for GoModulesManager {
             .arg("env")
             .arg("GOPATH")
             .output()
+            .await
         {
             if output.status.success() {
                 String::from_utf8(output.stdout)

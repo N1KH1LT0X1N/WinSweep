@@ -111,6 +111,7 @@ impl PackageManager for PoetryManager {
             .arg("config")
             .arg("cache-dir")
             .output()
+            .await
         {
             if output.status.success() {
                 if let Ok(cache_dir) = String::from_utf8(output.stdout) {
@@ -236,6 +237,7 @@ impl PackageManager for PoetryManager {
                     .arg("pypi")
                     .arg("-q")
                     .output()
+                    .await
                 {
                     Ok(output) => {
                         if !output.status.success() {

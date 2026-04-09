@@ -240,6 +240,7 @@ impl PackageManager for PnpmManager {
                     .arg("store")
                     .arg("prune")
                     .output()
+                    .await
                 {
                     Ok(output) => {
                         if !output.status.success() {
@@ -312,6 +313,7 @@ impl PackageManager for PnpmManager {
             .arg("root")
             .arg("-g")
             .output()
+            .await
         {
             if output.status.success() {
                 if let Ok(root_path) = String::from_utf8(output.stdout) {
