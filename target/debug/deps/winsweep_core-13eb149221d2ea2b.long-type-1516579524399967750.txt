@@ -1,1 +1,0 @@
-impl std::future::Future<Output = Result<Output, std::io::Error>>

@@ -1,0 +1,44 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.o
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# PowerShell scripts (optional - remove if you want them tracked)
+setup_*.ps1
+verify*.ps1
+check_*.ps1
+fix_*.ps1
+build_in_vs_dev.bat
