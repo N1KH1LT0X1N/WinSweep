@@ -6,10 +6,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
+use std::ffi::{OsString, OsStr};
+use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use windows::core::{GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, HANDLE, HRESULT};
 use windows::Win32::System::RestartManager::{
@@ -88,7 +88,7 @@ impl RestartManager {
 
         if result != ERROR_SUCCESS {
             return Err(anyhow::anyhow!(
-                "Failed to start Restart Manager session: error {}",
+                "Failed to start Restart Manager session: error {:?}",
                 result
             ));
         }
@@ -138,7 +138,7 @@ impl RestartManager {
 
         if result != ERROR_SUCCESS {
             return Err(anyhow::anyhow!(
-                "Failed to register resources: error {}",
+                "Failed to register resources: error {:?}",
                 result
             ));
         }
@@ -167,7 +167,7 @@ impl RestartManager {
         if result != ERROR_SUCCESS && result != 234 {
             // 234 = ERROR_MORE_DATA
             return Err(anyhow::anyhow!(
-                "Failed to get application list size: error {}",
+                "Failed to get application list size: error {:?}",
                 result
             ));
         }
@@ -201,7 +201,7 @@ impl RestartManager {
 
         if result != ERROR_SUCCESS {
             return Err(anyhow::anyhow!(
-                "Failed to get application list: error {}",
+                "Failed to get application list: error {:?}",
                 result
             ));
         }
@@ -256,7 +256,7 @@ impl RestartManager {
 
         if result != ERROR_SUCCESS {
             return Err(anyhow::anyhow!(
-                "Failed to shutdown applications: error {}",
+                "Failed to shutdown applications: error {:?}",
                 result
             ));
         }
@@ -278,7 +278,7 @@ impl RestartManager {
 
         if result != ERROR_SUCCESS {
             return Err(anyhow::anyhow!(
-                "Failed to restart applications: error {}",
+                "Failed to restart applications: error {:?}",
                 result
             ));
         }

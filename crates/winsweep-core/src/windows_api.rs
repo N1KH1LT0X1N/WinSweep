@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{GetLastError, BOOL, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
 use windows::Win32::Security::{

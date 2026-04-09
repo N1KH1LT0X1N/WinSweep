@@ -9,8 +9,10 @@ use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
 use tokio::sync::{mpsc, Mutex};
+
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use windows::core::PCWSTR;
@@ -59,7 +61,7 @@ impl IpcServer {
             .context("Failed to create named pipe with security")?;
 
         // Convert to tokio NamedPipeServer
-        let server = NamedPipeServer::from_raw_handle(pipe_handle as _);
+        let server = NamedPipeServer::from_raw_handle(pipe_handle);
 
         let (tx, rx) = mpsc::unbounded_channel();
         let receiver = Arc::new(Mutex::new(rx));
