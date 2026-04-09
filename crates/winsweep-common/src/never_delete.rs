@@ -141,7 +141,7 @@ pub fn should_never_delete(path: &PathBuf) -> bool {
     // Check if it's a parent of a never-delete path
     for never_path in NEVER_DELETE_PATHS {
         let never_path_buf = PathBuf::from(never_path);
-        if never_path_buf.starts_with(&path) {
+        if never_path_buf.starts_with(path) {
             return true;
         }
     }
@@ -152,7 +152,7 @@ pub fn should_never_delete(path: &PathBuf) -> bool {
             for pattern in NEVER_DELETE_PATTERNS {
                 if matches_pattern(file_str, pattern) {
                     // Special case: allow deletion of these extensions in certain contexts
-                    if is_safe_context(&path, file_str) {
+                    if is_safe_context(path, file_str) {
                         continue;
                     }
                     return true;
@@ -175,7 +175,7 @@ fn matches_pattern(name: &str, pattern: &str) -> bool {
 }
 
 /// Check if a potentially dangerous file is safe to delete in its current context
-fn is_safe_context(path: &PathBuf, file_name: &str) -> bool {
+fn is_safe_context(path: &Path, file_name: &str) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
 
     // Safe contexts for .exe files

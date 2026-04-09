@@ -379,7 +379,7 @@ impl PoetryManager {
             let path = entry.path();
 
             if path.is_dir() {
-                let (deleted, freed) = Self::delete_directory_contents(&path).await?;
+                let (deleted, freed) = Box::pin(Self::delete_directory_contents(&path)).await?;
                 files_deleted += deleted;
                 space_freed += freed;
                 std::fs::remove_dir(path)?;

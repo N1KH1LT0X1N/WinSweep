@@ -198,7 +198,7 @@ pub async fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
         let entry_path = entry.path();
 
         if entry_path.is_dir() {
-            total_size += calculate_directory_size(&entry_path).await?;
+            total_size += Box::pin(calculate_directory_size(&entry_path)).await?;
         } else {
             total_size += entry.metadata().await?.len();
         }

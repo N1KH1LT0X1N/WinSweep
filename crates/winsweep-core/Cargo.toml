@@ -38,9 +38,10 @@ once_cell = { workspace = true }
 lazy_static = { workspace = true }
 async-trait = "0.1"
 shellexpand = "3"
+futures = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
-tempdir = "0.3"
+tempfile = "3.8"
 pretty_assertions = "1.4"
 mockall = { workspace = true }

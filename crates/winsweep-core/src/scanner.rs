@@ -220,7 +220,7 @@ async fn scan_directory_recursive(
     // Recursively scan subdirectories
     for subdir in subdirs {
         if let Err(e) =
-            scan_directory_recursive(&subdir, config, windows_api, junction_detector, sender).await
+            Box::pin(scan_directory_recursive(&subdir, config, windows_api, junction_detector, sender)).await
         {
             error!("Error scanning {}: {}", subdir.display(), e);
         }

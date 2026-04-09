@@ -142,7 +142,7 @@ impl PackageManager for CargoManager {
     }
 
     /// Clean all cargo caches
-    pub async fn clean_all_caches(&self) -> Result<PackageCleanResult> {
+    async fn clean_all_caches(&self) -> Result<PackageCleanResult> {
         let start_time = std::time::Instant::now();
         let mut space_freed = 0u64;
         let mut items_deleted = 0u64;
