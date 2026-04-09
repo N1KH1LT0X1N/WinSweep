@@ -9,7 +9,7 @@ use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -167,7 +167,8 @@ impl IpcClient {
     pub async fn connect(&self) -> Result<()> {
         info!("Connecting to IPC server");
 
-        let client = NamedPipeClient::connect(PIPE_NAME)
+        let client = ClientOptions::new()
+            .open(PIPE_NAME)
             .await
             .context("Failed to connect to named pipe")?;
 

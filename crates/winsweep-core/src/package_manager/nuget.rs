@@ -161,7 +161,7 @@ impl PackageManager for NugetManager {
         false
     }
 
-    async fn get_version(&self) -> Result<String> {
+    async fn get_version(&self) -> Result<Option<String>> {
         // Try nuget.exe first
         if let Ok(nuget_path) = which("nuget.exe") {
             let output = Command::new(nuget_path).arg("-Version").output().await;
@@ -169,7 +169,7 @@ impl PackageManager for NugetManager {
             match output {
                 Ok(result) if result.status.success() => {
                     let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    return Ok(version);
+                    return Ok(Some(version));
                 }
                 _ => {}
             }
@@ -182,13 +182,13 @@ impl PackageManager for NugetManager {
             match output {
                 Ok(result) if result.status.success() => {
                     let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    return Ok(format!("dotnet {}", version));
+                    return Ok(Some(format!("dotnet {}", version)));
                 }
                 _ => {}
             }
         }
 
-        Err(anyhow::anyhow!("Failed to get NuGet version"))
+        Ok(None)
     }
 
     async fn get_cache_paths(&self) -> Result<Vec<PathBuf>> {

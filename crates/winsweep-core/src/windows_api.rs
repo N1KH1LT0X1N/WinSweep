@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use tracing::{debug, error, warn};
 use windows::core::{PCWSTR, PWSTR};
@@ -220,7 +220,7 @@ impl WindowsApi {
             // Try to open the file with exclusive access
             let handle = CreateFileW(
                 PCWSTR(path_wide.as_ptr()),
-                windows::Win32::Storage::FileSystem::GENERIC_READ,
+                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
                 FILE_SHARE_READ,
                 Some(ptr::null()),
                 OPEN_EXISTING,

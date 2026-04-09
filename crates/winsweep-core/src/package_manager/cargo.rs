@@ -99,7 +99,7 @@ impl PackageManager for CargoManager {
     }
 
     /// Get cargo version
-    pub async fn get_version(&self) -> Result<String> {
+    async fn get_version(&self) -> Result<Option<String>> {
         let cargo_path = self.get_cargo_path()?;
 
         let output = Command::new(cargo_path).arg("--version").output().await;
@@ -107,9 +107,9 @@ impl PackageManager for CargoManager {
         match output {
             Ok(result) if result.status.success() => {
                 let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                Ok(version)
+                Ok(Some(version))
             }
-            _ => Err(anyhow::anyhow!("Failed to get cargo version")),
+            _ => Ok(None),
         }
     }
 

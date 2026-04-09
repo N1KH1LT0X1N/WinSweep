@@ -4,7 +4,7 @@ use super::{
     calculate_directory_size, format_bytes, safe_delete_directory, CacheInfo, PackageCleanResult,
     PackageManager,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -178,7 +178,7 @@ impl PackageManager for PipManager {
         }
     }
 
-    async fn get_version(&self) -> Result<String> {
+    async fn get_version(&self) -> Result<Option<String>> {
         let pip_path = self.get_pip_path().await?;
 
         let output = Command::new(pip_path).arg("--version").output().await;
@@ -186,7 +186,7 @@ impl PackageManager for PipManager {
         match output {
             Ok(result) if result.status.success() => {
                 let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                return Ok(version);
+                return Ok(Some(version));
             }
             _ => {}
         }
@@ -208,7 +208,7 @@ impl PackageManager for PipManager {
         match output {
             Ok(result) if result.status.success() => {
                 let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                Ok(version)
+                Ok(Some(version))
             }
             _ => bail!("Failed to get pip version"),
         }
