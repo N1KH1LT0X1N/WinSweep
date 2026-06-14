@@ -16,7 +16,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -84,7 +84,7 @@ jobs:
       run: cargo build --release -p ${{ matrix.target }}
       
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.target }}-windows
         path: target/x86_64-pc-windows-gnu/release/${{ matrix.target }}.exe
@@ -97,7 +97,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Download artifacts
       uses: actions/download-artifact@v4
@@ -129,7 +129,7 @@ jobs:
       shell: powershell
       
     - name: Upload package
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: winsweep-windows-package
         path: |
@@ -142,7 +142,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -162,13 +162,37 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       
     - name: Generate documentation
       run: cargo doc --all-features --no-deps
+      
+    - name: Prepare documentation for deployment
+      if: github.ref == 'refs/heads/main'
+      run: |
+        # With default target set, cargo doc outputs to target/x86_64-pc-windows-gnu/doc
+        $docDir = "target/x86_64-pc-windows-gnu/doc"
+        $publishDir = "target/doc"
+        if (Test-Path $docDir) {
+            New-Item -ItemType Directory -Path $publishDir -Force
+            Copy-Item "$docDir/*" $publishDir -Recurse -Force
+        }
+        $indexContent = @"
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta http-equiv="refresh" content="0; url=winsweep/index.html" />
+        </head>
+        <body>
+          <p><a href="winsweep/index.html">Click here to view documentation</a></p>
+        </body>
+        </html>
+        "@
+        Set-Content -Path "$publishDir/index.html" -Value $indexContent
+      shell: powershell
       
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'

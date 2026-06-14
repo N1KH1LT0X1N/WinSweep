@@ -262,10 +262,13 @@ fn test_wsl_detection() {
 /// Test Docker client (skips if Docker is not available)
 #[tokio::test]
 async fn test_docker_client() {
-    let client = match DockerClient::new().await {
-        Ok(c) => c,
-        Err(_) => {
-            println!("Docker not available, skipping test");
+    let client_result =
+        tokio::time::timeout(std::time::Duration::from_secs(5), DockerClient::new()).await;
+
+    let client = match client_result {
+        Ok(Ok(c)) => c,
+        Ok(Err(_)) | Err(_) => {
+            println!("Docker not available or connection timed out, skipping test");
             return;
         }
     };
@@ -273,15 +276,17 @@ async fn test_docker_client() {
     println!("Docker daemon running: {}", client.is_daemon_running());
 
     if client.is_daemon_running() {
-        let containers = client.get_containers().await;
+        let containers =
+            tokio::time::timeout(std::time::Duration::from_secs(10), client.get_containers()).await;
         assert!(
-            containers.is_ok(),
+            containers.is_ok() && containers.unwrap().is_ok(),
             "get_containers should succeed when daemon is running"
         );
 
-        let images = client.get_images().await;
+        let images =
+            tokio::time::timeout(std::time::Duration::from_secs(10), client.get_images()).await;
         assert!(
-            images.is_ok(),
+            images.is_ok() && images.unwrap().is_ok(),
             "get_images should succeed when daemon is running"
         );
     }
