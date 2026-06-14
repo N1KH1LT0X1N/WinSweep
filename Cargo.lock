@@ -166,7 +166,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "x11rb",
 ]
 
@@ -4204,7 +4204,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6310,7 +6310,7 @@ dependencies = [
  "walkdir",
  "which",
  "windows 0.52.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "winsweep-common",
 ]
 
@@ -6337,7 +6337,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "uuid",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "winit",
  "winreg",
  "winsweep-common",
