@@ -3,7 +3,7 @@
 //! This module contains the list of critical system paths and files
 //! that must never be deleted by WinSweep.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Critical system paths that should never be deleted
 pub const NEVER_DELETE_PATHS: &[&str] = &[

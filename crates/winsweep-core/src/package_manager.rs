@@ -3,7 +3,7 @@
 //! This module provides a unified interface for managing different package managers
 //! and their cache cleanup operations.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -38,6 +38,11 @@ pub trait PackageManager: Send + Sync {
 
     /// Get detailed cache information
     async fn get_cache_info(&self) -> Result<Vec<CacheInfo>>;
+
+    /// Get a prevention tip explaining why this cache grows and how to avoid it
+    fn prevention_tip(&self) -> &'static str {
+        ""
+    }
 }
 
 /// Result of a package manager cleanup operation
@@ -60,6 +65,7 @@ pub struct CacheInfo {
 }
 
 /// Package manager registry for managing multiple package managers
+#[derive(Default)]
 pub struct PackageManagerRegistry {
     managers: Vec<Box<dyn PackageManager>>,
 }
@@ -106,6 +112,127 @@ impl PackageManagerRegistry {
 
         // Add nuget manager
         if let Ok(manager) = crate::package_manager::nuget::NugetManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add gradle manager
+        if let Ok(manager) = crate::package_manager::gradle::GradleManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add maven manager
+        if let Ok(manager) = crate::package_manager::maven::MavenManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add flutter/pub manager
+        if let Ok(manager) = crate::package_manager::flutter::FlutterManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add bun manager
+        if let Ok(manager) = crate::package_manager::bun::BunManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add pixi manager
+        if let Ok(manager) = crate::package_manager::pixi::PixiManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add PHP Composer manager
+        if let Ok(manager) = crate::package_manager::composer::ComposerManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add vcpkg manager
+        if let Ok(manager) = crate::package_manager::vcpkg::VcpkgManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Conan manager
+        if let Ok(manager) = crate::package_manager::conan::ConanManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add sbt manager
+        if let Ok(manager) = crate::package_manager::sbt::SbtManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Go build cache manager
+        if let Ok(manager) = crate::package_manager::go_build::GoBuildCacheManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Android SDK manager
+        if let Ok(manager) = crate::package_manager::android_sdk::AndroidSdkManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Git LFS manager
+        if let Ok(manager) = crate::package_manager::git_lfs::GitLfsManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Playwright manager
+        if let Ok(manager) = crate::package_manager::playwright::PlaywrightManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Cypress manager
+        if let Ok(manager) = crate::package_manager::cypress::CypressManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add browser cache managers (Chrome, Edge, Firefox)
+        if let Ok(manager) = crate::package_manager::browser::ChromeManager::new().await {
+            managers.push(Box::new(manager));
+        }
+        if let Ok(manager) = crate::package_manager::browser::EdgeManager::new().await {
+            managers.push(Box::new(manager));
+        }
+        if let Ok(manager) = crate::package_manager::browser::FirefoxManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Ruby gems manager
+        if let Ok(manager) = crate::package_manager::ruby_gems::RubyGemsManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Bundler manager
+        if let Ok(manager) = crate::package_manager::bundler::BundlerManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add uv manager
+        if let Ok(manager) = crate::package_manager::uv::UvManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add conda/mamba manager
+        if let Ok(manager) = crate::package_manager::conda::CondaManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add VS Code cache manager
+        if let Ok(manager) = crate::package_manager::vscode::VsCodeManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add JetBrains cache manager
+        if let Ok(manager) = crate::package_manager::jetbrains::JetBrainsManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Vagrant manager
+        if let Ok(manager) = crate::package_manager::vagrant::VagrantManager::new().await {
+            managers.push(Box::new(manager));
+        }
+
+        // Add Minikube manager
+        if let Ok(manager) = crate::package_manager::minikube::MinikubeManager::new().await {
             managers.push(Box::new(manager));
         }
 
@@ -178,12 +305,6 @@ impl PackageManagerRegistry {
     }
 }
 
-impl Default for PackageManagerRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Helper function to calculate directory size recursively
 pub async fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
     let mut total_size = 0u64;
@@ -220,7 +341,7 @@ pub async fn safe_delete_directory(path: &PathBuf) -> Result<u64> {
         let files = vec![path.clone()];
 
         // Try to shutdown applications using the files
-        if let Ok(_) = restart_manager.register_files(&files) {
+        if restart_manager.register_files(&files).is_ok() {
             if let Ok(apps) = restart_manager.get_applications() {
                 if !apps.is_empty() {
                     debug!("Applications using cache files: {:?}", apps);
@@ -267,11 +388,66 @@ pub fn format_bytes(bytes: u64) -> String {
 }
 
 // Re-export package manager implementations
+pub mod android_sdk;
+pub mod browser;
+pub mod bun;
+pub mod bundler;
 pub mod cargo;
+pub mod composer;
+pub mod conan;
+pub mod conda;
+pub mod cypress;
+pub mod flutter;
+pub mod git_lfs;
+pub mod go_build;
 pub mod go_modules;
+pub mod gradle;
+pub mod jetbrains;
+pub mod maven;
+pub mod minikube;
 pub mod npm;
 pub mod nuget;
 pub mod pip;
+pub mod pixi;
+pub mod playwright;
 pub mod pnpm;
 pub mod poetry;
+pub mod ruby_gems;
+pub mod sbt;
+pub mod uv;
+pub mod vagrant;
+pub mod vcpkg;
+pub mod vscode;
 pub mod yarn;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_all_package_managers_have_prevention_tip() {
+        let registry = PackageManagerRegistry::new().await;
+        let managers = registry.get_managers();
+        assert!(
+            !managers.is_empty(),
+            "Registry should contain at least one manager"
+        );
+        for manager in managers {
+            let tip = manager.prevention_tip();
+            assert!(
+                !tip.is_empty(),
+                "{} must have a non-empty prevention_tip",
+                manager.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
+    }
+}

@@ -2,13 +2,11 @@
 
 <div align="center">
 
-![WinSweep Logo](https://via.placeholder.com/200x80/1e1e1e/ffffff?text=WinSweep)
-
 **A safe, high-performance disk cleaning tool for Windows 10/11**
 
-[![Crates.io](https://img.shields.io/crates/v/winsweep)](https://crates.io/crates/winsweep)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://github.com/winsweep/winsweep/workflows/CI/badge.svg)](https://github.com/winsweep/winsweep/actions)
+[![Build Status](https://github.com/N1KH1LT0X1N/WinSweep/workflows/CI/badge.svg)](https://github.com/N1KH1LT0X1N/WinSweep/actions)
+[![Rust 1.75+](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
 [Download](#installation) • [Features](#features) • [Usage](#usage) • [Documentation](#documentation)
 
@@ -51,121 +49,116 @@ WinSweep is a powerful yet safe disk cleaning utility designed specifically for 
 ## Installation
 
 ### Prerequisites
-- Windows 10 or Windows 11
-- [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (for building from source)
+- Windows 10 (1903+) or Windows 11
+- For building from source: Rust 1.75+, `x86_64-pc-windows-gnu` target, MinGW-w64
 
 ### From Release (Recommended)
-1. Download the latest release from [GitHub Releases](https://github.com/winsweep/winsweep/releases)
-2. Run the installer
-3. Launch WinSweep from the Start menu
+1. Download `winsweep-<version>-setup.exe` from [GitHub Releases](https://github.com/N1KH1LT0X1N/WinSweep/releases)
+2. Run the installer (requires admin for `%ProgramFiles%`)
+3. Launch **WinSweep** from the Start Menu
+
+### Portable ZIP
+Download and extract anywhere; run `winsweep-gui.exe` directly — no installation required.
 
 ### From Source
 ```powershell
-# Clone the repository
-git clone https://github.com/winsweep/winsweep.git
+# Install the target toolchain (once)
+rustup target add x86_64-pc-windows-gnu
+
+git clone https://github.com/N1KH1LT0X1N/WinSweep.git
 cd winsweep
 
-# Build release binaries
-.\build.ps1 --release
+# GUI with system tray
+cargo build --release -p winsweep-gui --features system-tray
 
-# Run the application
-.\target\release\winsweep.exe
-```
+# CLI
+cargo build --release -p winsweep-cli
 
-### Using Cargo
-```powershell
-# Install from crates.io (coming soon)
-cargo install winsweep
-
-# Or build from source
-cargo install --path .
+# Binaries land in:
+# target\x86_64-pc-windows-gnu\release\winsweep-gui.exe
+# target\x86_64-pc-windows-gnu\release\winsweep-cli.exe
 ```
 
 ## Quick Start
 
-### GUI Mode
+### GUI
+
+Double-click `winsweep-gui.exe`. The Dashboard opens with live system stats.
+
+Common workflow:
+1. **Dashboard → 🔍 Quick Scan** or navigate to **Scan**.
+2. Set the scan path and click **Start Scan**.
+3. Review results, check the items to delete.
+4. Click **Delete Selected** (or **Delete All**).
+
+### CLI
+
 ```powershell
-# Launch the graphical interface
-winsweep gui
-```
+# Interactive TUI
+winsweep-cli C:\Users\$env:USERNAME
 
-### Command Line Interface
-```powershell
-# Scan for junk files (dry run)
-winsweep scan --path C:\
+# Stream NDJSON — pipe into PowerShell
+winsweep-cli --output ndjson C:\ |
+    ForEach-Object { $_ | ConvertFrom-Json } |
+    Where-Object { $_.size_bytes -gt 100MB }
 
-# Clean with confirmation
-winsweep clean --path C:\Users\%USERNAME% --interactive
+# Files older than 90 days — preview only
+winsweep-cli --output ndjson --older 90 --dry-run C:\Dev
 
-# Clean specific categories
-winsweep clean --categories temp,cache,logs --auto
-```
-
-### PowerShell Module
-```powershell
-# Import the module
-Import-Module WinSweep
-
-# Clean with PowerShell pipeline
-Get-ChildItem C:\Temp | Remove-WinSweepJunk
-
-# Schedule regular cleaning
-Register-WinSweepScheduledTask -Daily -At 3am
+# All options
+winsweep-cli --help
 ```
 
 ## Usage
 
-### Graphical Interface
-The WinSweep GUI provides an intuitive way to clean your system:
+### CLI Reference
 
-1. **Select Drive/Folder** - Choose what to scan
-2. **Review Results** - See categorized junk files
-3. **Customize** - Include/exclude specific file types
-4. **Clean** - Click "Clean" to remove selected files
+```
+Usage: winsweep-cli [OPTIONS] [PATH]...
 
-### Command Line Options
-```bash
-# Basic usage
-winsweep [OPTIONS] <SUBCOMMAND>
+Arguments:
+  [PATH]...  Paths to scan (default: current directory)
 
-# Subcommands
-scan        Scan for junk files without deleting
-clean       Clean up junk files
-config      Manage configuration
-gui         Launch graphical interface
-
-# Options
--p, --path <PATH>         Path to scan (default: system drives)
--c, --categories <CATS>   Specific categories to clean
---dry-run                 Show what would be deleted
---interactive             Prompt before each deletion
---admin                   Request administrator privileges
---config <FILE>           Use custom config file
+Options:
+  -v, --verbose              Enable verbose logging
+  -l, --log-file <FILE>      Log file path
+      --mode <MODE>          Start view [scan|wsl|docker|update|services|config]
+      --older <DAYS>         Only report files older than N days
+      --output <FORMAT>      Output format: text (default) | ndjson
+      --dry-run              Preview only — do not delete anything
+  -h, --help                 Print help
+  -V, --version              Print version
 ```
 
 ### Configuration
-WinSweep creates a configuration file at:
-```
-%APPDATA%\WinSweep\config.toml
-```
 
-Example configuration:
+Configuration is stored at `%AppData%\WinSweep\config.toml`.
+
 ```toml
-[categories]
-temp = true
-cache = true
-logs = true
-recycle_bin = false
+auto_cleanup_enabled = false
+auto_cleanup_days = 7
+notify_low_disk_space = true
+low_disk_threshold = 10   # percent free before warning
 
-[protection]
-protect_projects = true
-protect_system = true
-min_file_age = "7d"
-max_file_size = "1GB"
+[scan]
+include_hidden = false
+include_system = false
+min_file_size = 1024      # bytes
+
+[cleanup]
+use_recycle_bin = true
+confirm_before_delete = true
+clean_temp_files = true
+clean_recycle_bin = true
+clean_prefetch = false
+clean_browser_cache = false
+
+[ui]
+show_notifications = true
+minimize_to_tray = false
 
 [logging]
-level = "info"
-file = "%APPDATA%\WinSweep\winsweep.log"
+log_level = "info"
 ```
 
 ## Documentation
@@ -175,44 +168,32 @@ file = "%APPDATA%\WinSweep\winsweep.log"
 - [API Reference](docs/api-reference.md) - Programmatic usage
 - [FAQ](docs/faq.md) - Common questions and issues
 
-## Screenshots
-
-<div align="center">
-  <img src="https://via.placeholder.com/800x450/2d2d2d/ffffff?text=Main+Interface" alt="Main Interface" width="45%">
-  <img src="https://via.placeholder.com/800x450/2d2d2d/ffffff?text=Scan+Results" alt="Scan Results" width="45%">
-</div>
-
 ## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-### Development Setup
 ```powershell
-# Clone the repository
-git clone https://github.com/winsweep/winsweep.git
-cd winsweep
-
-# Install development dependencies
-cargo install cargo-watch cargo-nextest
-
-# Run tests
-cargo nextest run --workspace
-
-# Run with auto-reload
-cargo watch -x 'run -- gui'
+# Quick dev-loop check before opening a PR
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace     # 105 tests
 ```
 
 ### Project Structure
 ```
 WinSweep/
+├── Cargo.toml                 workspace manifest
+├── .cargo/config.toml         default target: x86_64-pc-windows-gnu
 ├── crates/
-│   ├── winsweep-common/     # Shared types and utilities
-│   ├── winsweep-core/       # Core scanning and cleaning logic
-│   ├── winsweep-cli/        # Command-line interface
-│   └── winsweep-gui/        # Graphical user interface
-├── scripts/                 # Build and utility scripts
-├── docs/                    # Documentation
-└── tests/                   # Integration tests
+│   ├── winsweep-common/       Config, types, NEVER_DELETE
+│   ├── winsweep-core/         Scanner, CleanupManager, 33 package managers
+│   ├── winsweep-cli/          TUI + ndjson streaming CLI
+│   └── winsweep-gui/          egui GUI + system tray
+├── tests/
+│   └── integration_tests.rs   105 total tests
+├── installer/
+│   └── winsweep.nsi           NSIS installer script
+└── docs/                      user / developer / api docs
 ```
 
 ## Security
@@ -236,10 +217,12 @@ WinSweep is optimized for speed:
 
 ## Compatibility
 
-- **Windows 10** - Version 1903 and later
-- **Windows 11** - All versions
-- **Windows Server** - 2016 and later
-- **Architecture** - x64, ARM64
+| | Supported |
+|---|---|
+| Windows 10 (1903+) | ✔ |
+| Windows 11 | ✔ |
+| Windows Server 2016+ | ✔ |
+| Architecture | x64 |
 
 ## License
 
@@ -247,16 +230,17 @@ WinSweep is released under the [MIT License](LICENSE).
 
 ## Support
 
-- **Documentation** - [docs/](docs/)
-- **Issue Tracker** - [GitHub Issues](https://github.com/winsweep/winsweep/issues)
-- **Discussions** - [GitHub Discussions](https://github.com/winsweep/winsweep/discussions)
-- **Email Support** - [support@winsweep.io](mailto:support@winsweep.io)
+- **Documentation** — [docs/](docs/)
+- **Issue Tracker** — [GitHub Issues](https://github.com/N1KH1LT0X1N/WinSweep/issues)
+- **Discussions** — [GitHub Discussions](https://github.com/N1KH1LT0X1N/WinSweep/discussions)
 
 ## Acknowledgments
 
-- **Built with Rust** for safety and performance
-- **UI powered by egui**
-- **Thanks to all contributors**
+- **[egui](https://github.com/emilk/egui)** — immediate-mode GUI framework
+- **[sysinfo](https://github.com/GuillaumeGomez/sysinfo)** — cross-platform system info
+- **[tokio](https://tokio.rs/)** — async runtime
+- **[windows-rs](https://github.com/microsoft/windows-rs)** — Windows API bindings
+- All contributors
 
 ---
 

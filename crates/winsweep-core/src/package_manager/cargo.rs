@@ -4,7 +4,8 @@ use super::{
     calculate_directory_size, format_bytes, safe_delete_directory, CacheInfo, PackageCleanResult,
     PackageManager,
 };
-use anyhow::{Context, Result};
+use anyhow::Context;
+use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -12,6 +13,7 @@ use tracing::{debug, info, warn};
 use which::which;
 
 /// Cargo package manager
+#[derive(Default)]
 pub struct CargoManager {
     cargo_path: Option<PathBuf>,
     cargo_home: Option<PathBuf>,
@@ -52,6 +54,16 @@ impl CargoManager {
     async fn get_git_cache_path(&self) -> Result<PathBuf> {
         let cargo_home = self.get_cargo_home().await?;
         Ok(cargo_home.join("git"))
+    }
+
+    /// Get cargo executable path
+    fn get_cargo_path(&self) -> Result<PathBuf> {
+        if let Some(ref path) = self.cargo_path {
+            return Ok(path.clone());
+        }
+        which("cargo.exe")
+            .or_else(|_| which("cargo"))
+            .context("cargo not found in PATH")
     }
 
     /// Get target directories
@@ -150,11 +162,52 @@ impl PackageManager for CargoManager {
 
         info!("Cleaning cargo caches");
 
+        // Recommend cargo-cache if it isn't installed — it provides smarter selective cleanup
+        // (e.g. keep the N most recent versions of each crate).
+        let has_cargo_cache = which("cargo-cache").is_ok()
+            || Command::new("cargo")
+                .args(["cache", "--version"])
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+        if !has_cargo_cache {
+            warn!(
+                "cargo-cache is not installed. For smarter Cargo cache management, run: \
+                 cargo install cargo-cache"
+            );
+            errors.push(
+                "cargo-cache not found — install it with `cargo install cargo-cache` \
+                 for selective registry cleanup. Falling back to full directory removal."
+                    .to_string(),
+            );
+        } else {
+            // Use cargo-cache --autoclean for the registry (keeps all crates used in any local project)
+            debug!("Running cargo-cache --autoclean");
+            match Command::new("cargo")
+                .args(["cache", "--autoclean"])
+                .output()
+                .await
+            {
+                Ok(result) if result.status.success() => {
+                    debug!("cargo-cache --autoclean succeeded");
+                }
+                Ok(result) => {
+                    warn!(
+                        "cargo-cache --autoclean failed: {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                }
+                Err(e) => warn!("Failed to run cargo-cache: {}", e),
+            }
+        }
+
         // Get current directory to restore later
         let current_dir = std::env::current_dir()?;
 
         // Use cargo clean if cargo_home is set
-        if let Some(ref cargo_home) = self.cargo_home {
+        if let Some(ref _cargo_home) = self.cargo_home {
             let cargo_path = self.get_cargo_path()?;
 
             let output = Command::new(cargo_path)
@@ -298,13 +351,8 @@ impl PackageManager for CargoManager {
 
         Ok(cache_info)
     }
-}
 
-impl Default for CargoManager {
-    fn default() -> Self {
-        Self {
-            cargo_path: None,
-            cargo_home: None,
-        }
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'cargo sweep' or set CARGO_TARGET_DIR to a shared directory. Clean old registry versions with 'cargo cache --autoclean'."
     }
 }

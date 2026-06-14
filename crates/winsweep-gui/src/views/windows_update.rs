@@ -1,6 +1,7 @@
 //! Windows Update view
 
 use crate::viewmodel::WinSweepViewModel;
+use crate::views::utils::format_bytes;
 use eframe::egui;
 
 pub fn show_windows_update(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
@@ -36,7 +37,7 @@ pub fn show_windows_update(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel)
         }
 
         if ui.button("🧹 Clean Update Cache").clicked() {
-            viewmodel.windows_update.start_cleanup();
+            viewmodel.start_windows_update_cleanup();
         }
 
         if viewmodel.windows_update.cleanup_in_progress {
@@ -120,10 +121,10 @@ pub fn show_windows_update(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel)
                                         ui.colored_label(egui::Color32::GREEN, "✓ Installed");
                                     } else {
                                         if ui.button("Download").clicked() {
-                                            // TODO: Download update
+                                            viewmodel.windows_update.status_message = Some(format!("Downloading update '{}' is not yet implemented", update.title));
                                         }
                                         if ui.button("Install").clicked() {
-                                            // TODO: Install update
+                                            viewmodel.windows_update.status_message = Some(format!("Installing update '{}' is not yet implemented", update.title));
                                         }
                                     }
                                 },
@@ -164,28 +165,5 @@ pub fn show_windows_update(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel)
     if let Some(ref msg) = viewmodel.windows_update.status_message {
         ui.separator();
         ui.label(msg);
-    }
-}
-
-// Helper function to format bytes
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-
-    if bytes == 0 {
-        return "0 B".to_string();
-    }
-
-    let mut size = bytes as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{} {}", bytes, UNITS[unit_index])
-    } else {
-        format!("{:.2} {}", size, UNITS[unit_index])
     }
 }

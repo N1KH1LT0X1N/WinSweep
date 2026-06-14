@@ -1,6 +1,7 @@
 //! Docker view
 
 use crate::viewmodel::WinSweepViewModel;
+use crate::views::utils::format_bytes;
 use eframe::egui;
 
 pub fn show_docker(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
@@ -10,18 +11,11 @@ pub fn show_docker(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
     // Refresh and status
     ui.horizontal(|ui| {
         if ui.button("🔄 Refresh").clicked() {
-            if let Some(ref docker_client) = viewmodel.docker_client() {
-                let client = docker_client.clone();
-                let ctx = ui.ctx().clone();
-                std::thread::spawn(move || {
-                    // TODO: Refresh resources asynchronously
-                    ctx.request_repaint();
-                });
-            }
+            viewmodel.start_docker_refresh_task();
         }
 
         // Docker daemon status
-        if let Some(ref docker_client) = viewmodel.docker_client() {
+        if let Some(docker_client) = viewmodel.docker_client() {
             if docker_client.is_daemon_running() {
                 ui.colored_label(egui::Color32::GREEN, "● Docker daemon running");
             } else {
@@ -105,20 +99,27 @@ pub fn show_docker(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
     // Cleanup actions
     ui.separator();
     ui.horizontal(|ui| {
-        if viewmodel.docker.operation_in_progress {
+        if viewmodel.is_operation_running() {
             ui.spinner();
-            ui.add(egui::ProgressBar::new(viewmodel.docker.operation_progress));
+            ui.add(egui::ProgressBar::new(
+                viewmodel.operation_progress().unwrap_or(0.0),
+            ));
         } else {
-            if ui.button("🗑️ Clean Selected").clicked() {
-                // TODO: Clean selected resources
-            }
-
             if ui.button("🗑️ Clean All").clicked() {
-                // TODO: Clean all resources
+                let tab = match viewmodel.docker.selected_tab {
+                    crate::viewmodel::DockerTab::Containers => "containers",
+                    crate::viewmodel::DockerTab::Images => "images",
+                    crate::viewmodel::DockerTab::Volumes => "volumes",
+                    crate::viewmodel::DockerTab::Networks => "networks",
+                };
+                viewmodel.start_docker_prune_task(tab);
             }
 
             if ui.button("🧹 Prune System").clicked() {
-                // TODO: System prune
+                viewmodel.start_docker_prune_task("containers");
+                viewmodel.start_docker_prune_task("images");
+                viewmodel.start_docker_prune_task("volumes");
+                viewmodel.start_docker_prune_task("networks");
             }
         }
     });
@@ -154,16 +155,25 @@ fn show_containers(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                     ui.label(format!("{:?}", container.status));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let id = container.id.clone();
                         if matches!(
                             container.status,
                             winsweep_core::docker::ContainerStatus::Running
-                        ) {
-                            if ui.button("⏹").clicked() {
-                                // TODO: Stop container
-                            }
+                        ) && ui.button("⏹").clicked()
+                        {
+                            std::thread::spawn(move || {
+                                let _ = std::process::Command::new("docker")
+                                    .args(["stop", &id])
+                                    .output();
+                            });
                         }
+                        let id2 = container.id.clone();
                         if ui.button("🗑️").clicked() {
-                            // TODO: Remove container
+                            std::thread::spawn(move || {
+                                let _ = std::process::Command::new("docker")
+                                    .args(["rm", "-f", &id2])
+                                    .output();
+                            });
                         }
                     });
                 });
@@ -194,8 +204,13 @@ fn show_images(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                     ui.label(format_bytes(image.size));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let id = image.id.clone();
                         if ui.button("🗑️").clicked() {
-                            // TODO: Remove image
+                            std::thread::spawn(move || {
+                                let _ = std::process::Command::new("docker")
+                                    .args(["rmi", "-f", &id])
+                                    .output();
+                            });
                         }
                     });
                 });
@@ -218,11 +233,16 @@ fn show_volumes(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                 ui.horizontal(|ui| {
                     ui.label(&volume.name);
                     ui.label(&volume.driver);
-                    ui.label(&volume.mount_point.display().to_string());
+                    ui.label(volume.mount_point.display().to_string());
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let name = volume.name.clone();
                         if ui.button("🗑️").clicked() {
-                            // TODO: Remove volume
+                            std::thread::spawn(move || {
+                                let _ = std::process::Command::new("docker")
+                                    .args(["volume", "rm", "-f", &name])
+                                    .output();
+                            });
                         }
                     });
                 });
@@ -253,34 +273,16 @@ fn show_networks(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                     ui.label(format!("Internal: {}", network.internal));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let name = network.name.clone();
                         if ui.button("🗑️").clicked() {
-                            // TODO: Remove network
+                            std::thread::spawn(move || {
+                                let _ = std::process::Command::new("docker")
+                                    .args(["network", "rm", &name])
+                                    .output();
+                            });
                         }
                     });
                 });
             }
         });
-}
-
-// Helper function to format bytes
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-
-    if bytes == 0 {
-        return "0 B".to_string();
-    }
-
-    let mut size = bytes as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{} {}", bytes, UNITS[unit_index])
-    } else {
-        format!("{:.2} {}", size, UNITS[unit_index])
-    }
 }

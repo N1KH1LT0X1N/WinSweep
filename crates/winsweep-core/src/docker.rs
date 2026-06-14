@@ -5,16 +5,14 @@
 //! volume cleanup, and build cache management.
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::SystemTime;
 use tokio::process;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, warn};
 
 /// Docker API client with version negotiation
+#[derive(Clone)]
 pub struct DockerClient {
     api_version: String,
     daemon_running: bool,
@@ -384,7 +382,7 @@ impl DockerClient {
                     name: parts[1].to_string(),
                     driver: parts[2].to_string(),
                     scope: parts[3].to_string(),
-                    internal: parts.get(4).map(|s| s == "true").unwrap_or(false),
+                    internal: parts.get(4).map(|s| *s == "true").unwrap_or(false),
                     containers: Vec::new(), // Would need additional query
                     created: SystemTime::UNIX_EPOCH, // Not available in list
                 };
@@ -709,7 +707,10 @@ impl DockerClient {
             if parts.len() >= 2 {
                 if let Some(container_part) = parts.last() {
                     if let Some(slash_pos) = container_part.find('/') {
-                        let container_port = container_part[..slash_pos].parse::<u16>().ok()?;
+                        let container_port = match container_part[..slash_pos].parse::<u16>() {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
                         let protocol = container_part[slash_pos + 1..].to_string();
 
                         let host_port = if parts.len() == 3 {
@@ -737,7 +738,18 @@ impl DockerClient {
             return Some(0);
         }
 
-        let (num, unit) = size_str.split_at(size_str.len().saturating_sub(2));
+        // Try 2-char unit first (kB, MB, GB), fall back to 1-char (B)
+        let (num, unit) = if size_str.len() >= 2 {
+            let (n, u) = size_str.split_at(size_str.len() - 2);
+            if u == "kB" || u == "MB" || u == "GB" {
+                (n, u)
+            } else {
+                size_str.split_at(size_str.len() - 1)
+            }
+        } else {
+            size_str.split_at(size_str.len().saturating_sub(1))
+        };
+
         let num: f64 = num.parse().ok()?;
 
         match unit {

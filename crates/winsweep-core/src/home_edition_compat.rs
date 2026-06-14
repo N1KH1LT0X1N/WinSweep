@@ -4,7 +4,6 @@
 //! on Windows Home editions, ensuring WinSweep functionality across all editions.
 
 use crate::windows_api::WindowsApi;
-use crate::wsl_detector::{WslDetector, WslDistribution, WslVersion};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::process::Command;

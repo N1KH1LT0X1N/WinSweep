@@ -7,9 +7,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::process::{Child, Command};
-use tracing::{debug, error, info, warn};
-use winsweep_common::Config;
+use tokio::process::Command;
+use tracing::{debug, info, warn};
 
 /// Types of elevated operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,14 +77,13 @@ pub struct ProgressUpdate {
 }
 
 /// Elevated operation coordinator
-pub struct ElevatedCoordinator {
-    config: Config,
-}
+#[derive(Clone)]
+pub struct ElevatedCoordinator;
 
 impl ElevatedCoordinator {
     /// Create a new elevated coordinator
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Execute an elevated operation
@@ -118,7 +116,7 @@ impl ElevatedCoordinator {
             use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
             unsafe {
-                let mut token: HANDLE = 0;
+                let mut token: HANDLE = 0 as _;
                 if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE {
                     return false;
                 }
@@ -202,7 +200,7 @@ impl ElevatedCoordinator {
     async fn execute_operation_elevated(
         &self,
         operation: ElevatedOperation,
-        progress_callback: impl Fn(ProgressUpdate),
+        _progress_callback: impl Fn(ProgressUpdate),
     ) -> Result<ElevatedOperationResult> {
         // Create temporary files for communication
         let temp_dir = std::env::temp_dir();
@@ -233,6 +231,7 @@ impl ElevatedCoordinator {
         // Wait for process to complete
         let status = child
             .wait()
+            .await
             .context("Failed to wait for elevated process")?;
 
         // Read response file
@@ -309,8 +308,18 @@ impl ElevatedCoordinator {
         });
 
         if compress_backups {
-            // Implement backup compression
-            // This is a placeholder - real implementation would compress DataStore folders
+            let backup_path = PathBuf::from(r"C:\Windows\WinSxS\Backup");
+            if backup_path.exists() {
+                let output = Command::new("compact.exe")
+                    .args(["/c", "/s", &backup_path.display().to_string()])
+                    .output()
+                    .await;
+                if let Ok(ref o) = output {
+                    if !o.status.success() {
+                        warn!("compact.exe failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
+            }
         }
 
         progress_callback(ProgressUpdate {
@@ -420,7 +429,6 @@ impl ElevatedCoordinator {
                     space_freed += freed;
                 }
             }
-            progress += 50;
         }
 
         progress_callback(ProgressUpdate {
@@ -758,9 +766,9 @@ impl ElevatedCoordinator {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
                 if entry_path.is_dir() {
-                    let (deleted, freed) = self
-                        .delete_directory_contents(&entry_path, use_recycle_bin)
-                        .await?;
+                    let (deleted, freed) =
+                        Box::pin(self.delete_directory_contents(&entry_path, use_recycle_bin))
+                            .await?;
                     files_deleted += deleted;
                     space_freed += freed;
 
@@ -786,18 +794,17 @@ impl ElevatedCoordinator {
             #[cfg(windows)]
             {
                 use std::os::windows::ffi::OsStrExt;
-                use windows_sys::Win32::Shell::FOF_NO_UI;
-                use windows_sys::Win32::UI::Shell::SHFileOperationW;
+                use windows_sys::Win32::UI::Shell::{SHFileOperationW, FOF_NO_UI};
 
                 let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
                 path_wide.push(0); // Null terminator
 
                 let mut operation = windows_sys::Win32::UI::Shell::SHFILEOPSTRUCTW {
-                    hwnd: 0,
-                    wFunc: windows_sys::Win32::UI::Shell::FO_DELETE,
+                    hwnd: 0 as _,
+                    wFunc: windows_sys::Win32::UI::Shell::FO_DELETE as _,
                     pFrom: path_wide.as_ptr(),
                     pTo: std::ptr::null(),
-                    fFlags: FOF_NO_UI,
+                    fFlags: FOF_NO_UI as _,
                     fAnyOperationsAborted: 0,
                     hNameMappings: std::ptr::null_mut(),
                     lpszProgressTitle: std::ptr::null(),

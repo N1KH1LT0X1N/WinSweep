@@ -7,14 +7,33 @@ members = [
 ]
 resolver = "2"
 
+[package]
+name = "winsweep"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+winsweep-core = { path = "crates/winsweep-core" }
+winsweep-common = { path = "crates/winsweep-common" }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+dirs = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+toml = { workspace = true }
+serde_json = { workspace = true }
+
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["WinSweep Team"]
 license = "MIT"
-homepage = "https://github.com/winsweep/winsweep"
-repository = "https://github.com/winsweep/winsweep"
+homepage = "https://github.com/N1KH1LT0X1N/WinSweep"
+repository = "https://github.com/N1KH1LT0X1N/WinSweep"
 readme = "README.md"
 
 [workspace.dependencies]
@@ -40,6 +59,8 @@ windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Threading",
@@ -55,6 +76,7 @@ windows = { version = "0.52", features = [
     "Win32_UI_Shell",
     "Win32_System_WindowsProgramming",
     "Win32_System_Ioctl",
+    "Win32_System_SystemServices",
 ] }
 
 # CLI
@@ -82,6 +104,8 @@ parking_lot = "0.12"
 once_cell = "1.19"
 lazy_static = "1.4"
 shellexpand = "3.1"
+reqwest = { version = "0.12", features = ["json"] }
+serde_yaml = "0.9"
 bytes = "1.5"
 base64 = "0.21"
 sha2 = "0.10"

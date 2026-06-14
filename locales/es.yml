@@ -1,0 +1,12 @@
+nav_dashboard: Panel
+nav_scan: Escanear
+nav_cleanup: Limpiar
+nav_settings: Ajustes
+nav_about: Acerca de
+action_scan: Escanear Ahora
+action_clean: Limpiar Seleccionados
+action_cancel: Cancelar
+status_ready: Listo
+status_scanning: Escaneando...
+status_cleaning: Limpiando...
+status_complete: Completo

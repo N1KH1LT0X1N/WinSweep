@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 /// Tool detector for checking availability of external tools
 pub struct ToolDetector {
@@ -178,8 +178,8 @@ impl ToolDetector {
 
         if let Ok(path) = which::which("pwsh.exe") {
             pwsh7_info.available = true;
+            pwsh7_info.version = self.get_powershell7_version(&path).ok().flatten();
             pwsh7_info.path = Some(path);
-            pwsh7_info.version = self.get_powershell7_version(&path).ok();
         }
 
         self.tools.insert("pwsh".to_string(), pwsh7_info);
@@ -426,7 +426,7 @@ impl ToolDetector {
     }
 
     /// Get file version from executable
-    fn get_file_version(&self, path: &PathBuf) -> Result<Option<String>> {
+    fn get_file_version(&self, _path: &PathBuf) -> Result<Option<String>> {
         // In a real implementation, this would use Windows APIs to get version info
         // For now, return None
         Ok(None)
@@ -523,7 +523,7 @@ impl ToolDetector {
         let output = Command::new("nuget").output();
         match output {
             Ok(result) if result.status.success() => {
-                let version_str = String::from_utf8_lossy(&result.stdout);
+                let _version_str = String::from_utf8_lossy(&result.stdout);
                 // Parse version from output
                 Ok(None) // Simplified for now
             }
@@ -573,7 +573,7 @@ impl ToolDetector {
 
     /// Check if a tool is available
     pub fn is_available(&self, name: &str) -> bool {
-        self.tools.get(name).map_or(false, |t| t.available)
+        self.tools.get(name).is_some_and(|t| t.available)
     }
 
     /// Get all missing required tools

@@ -22,7 +22,7 @@ pub struct WindowsUpdateViewModel {
 }
 
 /// Cleanup options
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CleanupOptions {
     pub remove_downloads: bool,
     pub compress_backups: bool,
@@ -83,28 +83,23 @@ impl WindowsUpdateViewModel {
 
     /// Update the Windows Update view model
     pub fn update(&mut self) {
-        // TODO: Update status and check for new updates
+        // No per-frame updates required
     }
 
     /// Check for updates
     pub fn check_for_updates(&mut self) {
         self.status_message = Some("Checking for updates...".to_string());
-        // TODO: Implement update checking
+        match Self::query_update_service_status() {
+            Ok(running) => self.update_status.service_running = running,
+            Err(e) => self.status_message = Some(format!("Failed to query service: {}", e)),
+        }
     }
 
-    /// Start cleanup
-    pub fn start_cleanup(&mut self) {
-        self.cleanup_in_progress = true;
-        self.cleanup_progress = 0.0;
-        self.status_message = Some("Cleaning Windows Update cache...".to_string());
-
-        // TODO: Implement cleanup
-    }
-
-    /// Stop cleanup
-    pub fn stop_cleanup(&mut self) {
-        self.cleanup_in_progress = false;
-        self.cleanup_progress = 0.0;
-        self.status_message = Some("Cleanup stopped".to_string());
+    fn query_update_service_status() -> Result<bool, Box<dyn std::error::Error>> {
+        let output = std::process::Command::new("sc")
+            .args(["query", "wuauserv"])
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.contains("RUNNING"))
     }
 }

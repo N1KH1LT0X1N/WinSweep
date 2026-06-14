@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 use which::which;
 
 /// pip package manager
+#[derive(Default)]
 pub struct PipManager {
     pip_path: Option<PathBuf>,
     cache_path: Option<PathBuf>,
@@ -75,8 +76,8 @@ impl PipManager {
 
         match output {
             Ok(result) if result.status.success() => {
-                let path_str = String::from_utf8_lossy(&result.stdout).trim();
-                let path = PathBuf::from(path_str);
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let path = PathBuf::from(stdout.trim());
                 return Ok(path);
             }
             _ => {
@@ -91,11 +92,9 @@ impl PipManager {
             dirs::home_dir().map(|d| d.join("AppData").join("Local").join("pip").join("cache")),
         ];
 
-        for cache_dir in cache_dirs {
-            if let Some(dir) = cache_dir {
-                if dir.exists() {
-                    return Ok(dir);
-                }
+        for dir in cache_dirs.into_iter().flatten() {
+            if dir.exists() {
+                return Ok(dir);
             }
         }
 
@@ -122,15 +121,14 @@ impl PipManager {
 
         // Common pip environment locations
         if let Some(home_dir) = dirs::home_dir() {
-            let mut paths = Vec::new();
-            paths.push(home_dir.join("AppData").join("Roaming").join("Python"));
-            paths.push(
+            let paths = vec![
+                home_dir.join("AppData").join("Roaming").join("Python"),
                 home_dir
                     .join("AppData")
                     .join("Local")
                     .join("Programs")
                     .join("Python"),
-            );
+            ];
             return Ok(paths);
         }
 
@@ -152,6 +150,16 @@ impl PipManager {
         }
 
         Ok(paths)
+    }
+
+    fn find_python_executable() -> Result<String> {
+        if which("python3.exe").is_ok() || which("python3").is_ok() {
+            return Ok("python3".to_string());
+        }
+        if which("python.exe").is_ok() || which("python").is_ok() {
+            return Ok("python".to_string());
+        }
+        anyhow::bail!("Python not found in PATH")
     }
 }
 
@@ -386,13 +394,8 @@ impl PackageManager for PipManager {
 
         Ok(cache_info)
     }
-}
 
-impl Default for PipManager {
-    fn default() -> Self {
-        Self {
-            pip_path: None,
-            cache_path: None,
-        }
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'pip cache purge' to clear wheel cache. Pin exact versions in requirements.txt to avoid redundant downloads."
     }
 }

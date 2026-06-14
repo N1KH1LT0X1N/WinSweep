@@ -15,12 +15,17 @@ pub fn show_services(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
         ui.checkbox(&mut viewmodel.services.show_running_only, "Running only");
 
         if ui.button("🔄 Refresh").clicked() {
-            // TODO: Refresh services
+            viewmodel.start_service_refresh_task();
         }
     });
 
     // Services list
-    let filtered_services = viewmodel.services.filtered_services();
+    let filtered_services: Vec<_> = viewmodel
+        .services
+        .filtered_services()
+        .into_iter()
+        .cloned()
+        .collect();
 
     if !filtered_services.is_empty() {
         ui.separator();
@@ -55,9 +60,9 @@ pub fn show_services(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                     frame.show(ui, |ui| {
                         ui.horizontal(|ui| {
                             // Status indicator
-                            let status_color = match service.status {
-                                winsweep_core::ServiceStatus::Running => egui::Color32::GREEN,
-                                winsweep_core::ServiceStatus::Stopped => egui::Color32::RED,
+                            let status_color = match service.status.current_state {
+                                winsweep_core::ServiceState::Running => egui::Color32::GREEN,
+                                winsweep_core::ServiceState::Stopped => egui::Color32::RED,
                                 _ => egui::Color32::YELLOW,
                             };
 
@@ -80,28 +85,26 @@ pub fn show_services(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                                 |ui| {
                                     if service.can_stop
                                         && matches!(
-                                            service.status,
-                                            winsweep_core::ServiceStatus::Running
+                                            service.status.current_state,
+                                            winsweep_core::ServiceState::Running
                                         )
+                                        && ui.button("⏹").clicked()
                                     {
-                                        if ui.button("⏹").clicked() {
-                                            // TODO: Stop service
-                                        }
+                                        viewmodel.stop_service_task(service.name.clone());
                                     }
 
                                     if service.can_start
                                         && !matches!(
-                                            service.status,
-                                            winsweep_core::ServiceStatus::Running
+                                            service.status.current_state,
+                                            winsweep_core::ServiceState::Running
                                         )
+                                        && ui.button("▶").clicked()
                                     {
-                                        if ui.button("▶").clicked() {
-                                            // TODO: Start service
-                                        }
+                                        viewmodel.start_service_task(service.name.clone());
                                     }
 
                                     if ui.button("🔄").clicked() {
-                                        // TODO: Restart service
+                                        viewmodel.restart_service_task(service.name.clone());
                                     }
                                 },
                             );
@@ -128,25 +131,37 @@ pub fn show_services(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                 ui.separator();
 
                 let service = &viewmodel.services.services[index];
+                let display_name = service.display_name.clone();
+                let service_name = service.name.clone();
+                let is_running = matches!(
+                    service.status.current_state,
+                    winsweep_core::ServiceState::Running
+                );
+                let start_type = service.start_type.clone();
+                let can_stop = service.can_stop;
+                let can_start = service.can_start;
                 ui.horizontal(|ui| {
-                    ui.heading(format!("{} Actions", service.display_name));
+                    ui.heading(format!("{} Actions", display_name));
 
-                    if matches!(service.status, winsweep_core::ServiceStatus::Running) {
+                    if is_running {
                         if ui.button("⏹ Stop").clicked() {
-                            // TODO: Stop service
+                            viewmodel.stop_service_task(service_name.clone());
                         }
                     } else {
                         if ui.button("▶ Start").clicked() {
-                            // TODO: Start service
+                            viewmodel.start_service_task(service_name.clone());
                         }
                     }
 
                     if ui.button("🔄 Restart").clicked() {
-                        // TODO: Restart service
+                        viewmodel.restart_service_task(service_name.clone());
                     }
 
                     if ui.button("⚙️ Properties").clicked() {
-                        // TODO: Show service properties
+                        viewmodel.services.status_message = Some(format!(
+                            "{} | Start: {:?} | Can stop: {} | Can start: {}",
+                            service_name, start_type, can_stop, can_start
+                        ));
                     }
                 });
             }

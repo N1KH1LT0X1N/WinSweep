@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 /// Audit log entry
@@ -361,7 +361,7 @@ impl AuditLogger {
         let metadata = std::fs::metadata(&self.log_file)?;
         let size_mb = metadata.len() / (1024 * 1024);
 
-        if size_mb > max_size_mb {
+        if size_mb > max_size_mb as u64 {
             let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
             let rotated_path = self.log_file.with_extension(format!("log.{}", timestamp));
 

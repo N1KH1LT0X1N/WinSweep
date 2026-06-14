@@ -1,7 +1,7 @@
 //! Package managers view model
 
 use serde::{Deserialize, Serialize};
-use winsweep_core::{CacheInfo, PackageCleanResult, PackageManager, PackageManagerRegistry};
+use winsweep_core::{PackageCleanResult, PackageManagerRegistry};
 
 /// Package managers view model
 #[derive(Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub struct PackageManagersViewModel {
 }
 
 /// Package manager information
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PackageManagerInfo {
     pub name: String,
     pub display_name: String,
@@ -43,20 +43,39 @@ impl PackageManagersViewModel {
 
     /// Update the package managers view model
     pub fn update(&mut self) {
-        // TODO: Update manager status
+        // No per-frame updates required
     }
 
     /// Refresh package managers
     pub async fn refresh_managers(
         &mut self,
         registry: &PackageManagerRegistry,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<PackageManagerInfo>, Box<dyn std::error::Error>> {
         self.managers.clear();
 
-        // TODO: Get managers from registry and update info
+        for manager in registry.get_managers() {
+            if manager.is_installed().await {
+                let cache_paths = manager
+                    .get_cache_paths()
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                let cache_size = manager.calculate_cache_size().await.unwrap_or(0);
+                self.managers.push(PackageManagerInfo {
+                    name: manager.name().to_string(),
+                    display_name: manager.display_name().to_string(),
+                    version: manager.get_version().await.ok().flatten(),
+                    cache_size,
+                    installed: true,
+                    cache_paths,
+                });
+            }
+        }
 
         self.status_message = Some("Package managers refreshed".to_string());
-        Ok(())
+        Ok(self.managers.clone())
     }
 
     /// Clean selected manager cache
@@ -64,34 +83,40 @@ impl PackageManagersViewModel {
         &mut self,
         registry: &PackageManagerRegistry,
     ) -> Result<PackageCleanResult, Box<dyn std::error::Error>> {
-        if let Some(index) = self.selected_manager {
-            if index < self.managers.len() {
-                self.operation_in_progress = true;
-                self.operation_progress = 0.0;
-
-                let manager_name = &self.managers[index].name;
-                self.status_message = Some(format!(
-                    "Cleaning {} cache...",
-                    self.managers[index].display_name
-                ));
-
-                // TODO: Implement actual cleanup
-
-                self.operation_in_progress = false;
-                self.operation_progress = 0.0;
-
-                // Return dummy result for now
-                Ok(PackageCleanResult {
-                    package_manager: manager_name.clone(),
-                    space_freed: 0,
-                    items_deleted: 0,
-                    errors: vec![],
-                    duration_ms: 0,
-                })
-            }
+        let Some(index) = self.selected_manager else {
+            return Err("No package manager selected".into());
+        };
+        if index >= self.managers.len() {
+            return Err("Invalid package manager index".into());
         }
 
-        Err("No package manager selected".into())
+        self.operation_in_progress = true;
+        self.operation_progress = 0.0;
+
+        let manager_name = self.managers[index].name.clone();
+        self.status_message = Some(format!(
+            "Cleaning {} cache...",
+            self.managers[index].display_name
+        ));
+
+        let result = if let Some(manager) = registry.get_by_name(&manager_name) {
+            manager
+                .clean_all_caches()
+                .await
+                .map_err(|e| e.to_string())?
+        } else {
+            PackageCleanResult {
+                package_manager: manager_name.clone(),
+                space_freed: 0,
+                items_deleted: 0,
+                errors: vec!["Manager not found in registry".to_string()],
+                duration_ms: 0,
+            }
+        };
+
+        self.operation_in_progress = false;
+        self.operation_progress = 0.0;
+        Ok(result)
     }
 
     /// Clean all manager caches
@@ -103,9 +128,7 @@ impl PackageManagersViewModel {
         self.operation_progress = 0.0;
         self.status_message = Some("Cleaning all package manager caches...".to_string());
 
-        let mut results = Vec::new();
-
-        // TODO: Implement cleanup for all managers
+        let results = registry.clean_all().await.map_err(|e| e.to_string())?;
 
         self.operation_in_progress = false;
         self.operation_progress = 0.0;

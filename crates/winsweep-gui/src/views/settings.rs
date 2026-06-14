@@ -76,7 +76,10 @@ pub fn show_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                 )
                 .clicked()
             {
-                let _ = viewmodel.settings.save_settings();
+                if viewmodel.settings.save_settings().is_ok() {
+                    let updated = viewmodel.settings.config().clone();
+                    viewmodel.set_config(updated);
+                }
             }
         });
     });
@@ -91,10 +94,15 @@ pub fn show_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
 fn show_general_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
     ui.heading("General Settings");
 
-    ui.checkbox(
-        &mut viewmodel.settings.config_mut().ui.start_with_windows,
-        "Start WinSweep with Windows",
-    );
+    let mut start_with_windows = viewmodel.settings.config().ui.start_with_windows;
+    if ui
+        .checkbox(&mut start_with_windows, "Start WinSweep with Windows")
+        .changed()
+    {
+        viewmodel
+            .settings
+            .set_start_with_windows(start_with_windows);
+    }
 
     ui.checkbox(
         &mut viewmodel.settings.config_mut().ui.minimize_to_tray,
@@ -110,12 +118,17 @@ fn show_general_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
 
     ui.label("Language:");
     ui.horizontal(|ui| {
+        let lang = &mut viewmodel.settings.config_mut().ui.language;
         egui::ComboBox::from_label("")
-            .selected_text("English (US)")
+            .selected_text(match lang.as_str() {
+                "es" => "Español",
+                "fr" => "Français",
+                _ => "English (US)",
+            })
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut "English", "English", "English (US)");
-                ui.selectable_value(&mut "Spanish", "Spanish", "Español");
-                ui.selectable_value(&mut "French", "French", "Français");
+                ui.selectable_value(lang, "en".to_string(), "English (US)");
+                ui.selectable_value(lang, "es".to_string(), "Español");
+                ui.selectable_value(lang, "fr".to_string(), "Français");
             });
     });
 
@@ -123,12 +136,13 @@ fn show_general_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
 
     ui.label("Theme:");
     ui.horizontal(|ui| {
+        let theme = &mut viewmodel.settings.config_mut().ui.theme;
         egui::ComboBox::from_label("")
-            .selected_text("Dark")
+            .selected_text(theme.as_str())
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut "Dark", "Dark", "Dark");
-                ui.selectable_value(&mut "Light", "Light", "Light");
-                ui.selectable_value(&mut "System", "System", "System");
+                ui.selectable_value(theme, "dark".to_string(), "Dark");
+                ui.selectable_value(theme, "light".to_string(), "Light");
+                ui.selectable_value(theme, "system".to_string(), "System");
             });
     });
 }
@@ -149,13 +163,32 @@ fn show_scan_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
     ui.separator();
 
     ui.label("Default scan locations:");
+    let mut to_remove = None;
+    let paths: Vec<std::path::PathBuf> = viewmodel.settings.config().scan.paths.clone();
+    for (i, path) in paths.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(path.display().to_string());
+            if ui.button("🗑").clicked() {
+                to_remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = to_remove {
+        viewmodel.settings.config_mut().scan.paths.remove(i);
+        viewmodel.settings.has_unsaved_changes = true;
+    }
     ui.horizontal(|ui| {
         if ui.button("Add Location").clicked() {
-            // TODO: Add location
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                viewmodel.settings.config_mut().scan.paths.push(folder);
+                viewmodel.settings.has_unsaved_changes = true;
+            }
         }
 
         if ui.button("Reset to Defaults").clicked() {
-            // TODO: Reset locations
+            viewmodel.settings.config_mut().scan.paths =
+                winsweep_common::types::ScanConfig::default().paths;
+            viewmodel.settings.has_unsaved_changes = true;
         }
     });
 
@@ -205,6 +238,40 @@ fn show_cleanup_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
             egui::DragValue::new(&mut viewmodel.settings.config_mut().auto_cleanup_days)
                 .suffix(" days"),
         );
+    });
+
+    if let Some(ref last) = viewmodel.dashboard.last_auto_cleanup {
+        ui.label(format!("Last run: {}", last));
+    } else {
+        ui.label("Last run: Never");
+    }
+
+    ui.separator();
+    ui.label("Windows Task Scheduler:");
+    let task_exists = crate::scheduler::task_exists();
+    ui.horizontal(|ui| {
+        if task_exists {
+            ui.colored_label(egui::Color32::GREEN, "✔ Scheduled task registered");
+            if ui.button("Remove Task").clicked() {
+                match crate::scheduler::remove_task() {
+                    Ok(msg) => viewmodel.settings.status_message = Some(msg),
+                    Err(e) => viewmodel.settings.status_message = Some(format!("Error: {}", e)),
+                }
+            }
+        } else {
+            ui.colored_label(egui::Color32::GRAY, "○ No scheduled task");
+            if ui.button("Register Startup Task").clicked() {
+                if let Some(exe) = crate::scheduler::current_exe() {
+                    let freq = crate::scheduler::TaskFrequency::from_days(
+                        viewmodel.settings.config().auto_cleanup_days,
+                    );
+                    match crate::scheduler::register_task(&exe, freq) {
+                        Ok(msg) => viewmodel.settings.status_message = Some(msg),
+                        Err(e) => viewmodel.settings.status_message = Some(format!("Error: {}", e)),
+                    }
+                }
+            }
+        }
     });
 
     ui.separator();
@@ -293,21 +360,41 @@ fn show_advanced_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) 
 
     ui.label("Data Management:");
     if ui.button("Export Settings").clicked() {
-        // TODO: Export settings
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("TOML", &["toml"])
+            .set_file_name("winsweep-settings.toml")
+            .save_file()
+        {
+            if let Err(e) = viewmodel.settings.export_settings(&path) {
+                viewmodel.settings.status_message = Some(format!("Export failed: {}", e));
+            } else {
+                viewmodel.settings.status_message = Some("Settings exported".to_string());
+            }
+        }
     }
 
     if ui.button("Import Settings").clicked() {
-        // TODO: Import settings
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("TOML", &["toml"])
+            .pick_file()
+        {
+            if let Err(e) = viewmodel.settings.import_settings(&path) {
+                viewmodel.settings.status_message = Some(format!("Import failed: {}", e));
+            } else {
+                viewmodel.settings.status_message = Some("Settings imported".to_string());
+            }
+        }
     }
 
     ui.separator();
 
     ui.colored_label(egui::Color32::RED, "⚠ Danger Zone:");
     if ui.button("Reset All Settings").clicked() {
-        // TODO: Reset all settings
+        viewmodel.settings.reset_to_defaults();
     }
 
     if ui.button("Clear All Data").clicked() {
-        // TODO: Clear all data
+        viewmodel.settings.clear_all_data();
+        viewmodel.dashboard.recent_operations.clear();
     }
 }

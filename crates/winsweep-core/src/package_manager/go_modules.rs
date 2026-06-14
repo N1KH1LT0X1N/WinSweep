@@ -1,7 +1,9 @@
 //! Go modules cache cleanup
 
-use crate::package_manager::{PackageCleanResult, PackageManager};
-use anyhow::{Context, Result};
+use crate::package_manager::{CacheInfo, PackageCleanResult, PackageManager};
+use anyhow::Context;
+use anyhow::Result;
+use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -67,12 +69,13 @@ impl GoModulesManager {
     }
 }
 
+#[async_trait]
 impl PackageManager for GoModulesManager {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "go"
     }
 
-    fn display_name(&self) -> &str {
+    fn display_name(&self) -> &'static str {
         "Go Modules"
     }
 
@@ -137,7 +140,7 @@ impl PackageManager for GoModulesManager {
             if output.status.success() {
                 if let Ok(mod_cache_path) = String::from_utf8(output.stdout) {
                     let mod_cache_path = mod_cache_path.trim();
-                    if !mod_cache_path.is_empty() && mod_cache_path != "" {
+                    if !mod_cache_path.is_empty() {
                         paths.push(PathBuf::from(mod_cache_path));
                     }
                 }
@@ -224,6 +227,10 @@ impl PackageManager for GoModulesManager {
         Ok(cache_info)
     }
 
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'go clean -modcache' when switching between major versions. Set GOPROXY=direct to avoid proxy cache duplication."
+    }
+
     async fn calculate_cache_size(&self) -> Result<u64> {
         let paths = self.get_cache_paths().await?;
         let mut total_size = 0;
@@ -236,8 +243,10 @@ impl PackageManager for GoModulesManager {
 
         Ok(total_size)
     }
+}
 
-    async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
+impl GoModulesManager {
+    pub async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!("Starting Go modules cache cleanup (dry_run: {})", dry_run);
 
         let mut space_freed = 0;
@@ -246,7 +255,7 @@ impl PackageManager for GoModulesManager {
         let start_time = std::time::Instant::now();
 
         // Use go clean -modcache if available
-        if self.is_installed() {
+        if self.is_installed().await {
             debug!("Running 'go clean -modcache'");
 
             if !dry_run {
@@ -315,8 +324,8 @@ impl PackageManager for GoModulesManager {
                             let entry_path = entry.path();
                             if entry_path
                                 .file_name()
-                                .to_string_lossy()
-                                .contains("go-build")
+                                .map(|n| n.to_string_lossy().contains("go-build"))
+                                .unwrap_or(false)
                             {
                                 if dry_run {
                                     if let Ok(size) = Self::calculate_directory_size(&entry_path) {
@@ -373,7 +382,7 @@ impl PackageManager for GoModulesManager {
         })
     }
 
-    async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
+    pub async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!("Starting Go global packages cleanup (dry_run: {})", dry_run);
 
         let mut space_freed = 0;
@@ -455,7 +464,6 @@ impl PackageManager for GoModulesManager {
 }
 
 impl GoModulesManager {
-    /// Calculate directory size recursively
     fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
         let mut total_size = 0;
 

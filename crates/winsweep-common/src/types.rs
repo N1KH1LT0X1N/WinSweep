@@ -162,6 +162,9 @@ pub struct ScanConfig {
     pub exclude_patterns: Vec<String>,
     pub include_patterns: Vec<String>,
     pub parallel_jobs: Option<usize>,
+    /// Only report artifact directories whose project lock-file is older than this many days.
+    /// When `None` all directories are reported regardless of age.
+    pub min_age_days: Option<u32>,
 }
 
 impl Default for ScanConfig {
@@ -171,13 +174,10 @@ impl Default for ScanConfig {
             include_hidden: false,
             follow_symlinks: false,
             max_file_size: Some(1024 * 1024 * 1024), // 1GB
-            exclude_patterns: vec![
-                "*.tmp".to_string(),
-                "*.temp".to_string(),
-                "*.log".to_string(),
-            ],
+            exclude_patterns: vec![], // no default exclusions — we want to find cleanable files
             include_patterns: vec![],
             parallel_jobs: None,
+            min_age_days: None,
         }
     }
 }

@@ -1,7 +1,9 @@
 //! pnpm package manager cache cleanup
 
-use crate::package_manager::{PackageCleanResult, PackageManager};
-use anyhow::{Context, Result};
+use crate::package_manager::{CacheInfo, PackageCleanResult, PackageManager};
+use anyhow::Context;
+use anyhow::Result;
+use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -63,12 +65,13 @@ impl PnpmManager {
     }
 }
 
+#[async_trait]
 impl PackageManager for PnpmManager {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "pnpm"
     }
 
-    fn display_name(&self) -> &str {
+    fn display_name(&self) -> &'static str {
         "pnpm"
     }
 
@@ -200,6 +203,10 @@ impl PackageManager for PnpmManager {
         Ok(cache_info)
     }
 
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'pnpm store prune' to remove unreferenced packages. Prefer shared store over per-project node_modules."
+    }
+
     async fn calculate_cache_size(&self) -> Result<u64> {
         let paths = self.get_cache_paths().await?;
         let mut total_size = 0;
@@ -212,8 +219,10 @@ impl PackageManager for PnpmManager {
 
         Ok(total_size)
     }
+}
 
-    async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
+impl PnpmManager {
+    pub async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!("Starting pnpm cache cleanup (dry_run: {})", dry_run);
 
         let mut space_freed = 0;
@@ -297,7 +306,7 @@ impl PackageManager for PnpmManager {
         })
     }
 
-    async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
+    pub async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!(
             "Starting pnpm global packages cleanup (dry_run: {})",
             dry_run

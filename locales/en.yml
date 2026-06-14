@@ -1,0 +1,13 @@
+app_name: WinSweep
+nav_dashboard: Dashboard
+nav_scan: Scan
+nav_cleanup: Cleanup
+nav_settings: Settings
+nav_about: About
+action_scan: Scan Now
+action_clean: Clean Selected
+action_cancel: Cancel
+status_ready: Ready
+status_scanning: Scanning...
+status_cleaning: Cleaning...
+status_complete: Complete

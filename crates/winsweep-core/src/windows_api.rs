@@ -2,31 +2,27 @@
 //!
 //! This module provides safe wrappers around Windows API functions used by WinSweep.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use tracing::{error, warn};
-use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{GetLastError, BOOL, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
-use windows::Win32::Security::{SECURITY_ATTRIBUTES};
-use windows::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION, SE_FILE_OBJECT,
-};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::GetLastError;
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetDiskFreeSpaceExW, GetFileAttributesW, GetFinalPathNameByHandleW,
     SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, VOLUME_NAME_DOS,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    INVALID_FILE_ATTRIBUTES, OPEN_EXISTING, VOLUME_NAME_DOS,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_SZ,
+    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
 };
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
-use windows::Win32::System::Ioctl::{DeviceIoControl, FSCTL_GET_REPARSE_POINT, REPARSE_DATA_BUFFER};
 
 /// Safe wrapper for Windows API operations
 pub struct WindowsApi;
@@ -43,12 +39,12 @@ impl WindowsApi {
 
         unsafe {
             let attributes = GetFileAttributesW(PCWSTR(path_wide.as_ptr()));
-            if attributes == INVALID_HANDLE_VALUE {
+            if attributes == INVALID_FILE_ATTRIBUTES {
                 let error = GetLastError();
                 warn!(
-                    "GetFileAttributesW failed for {}: error {}",
+                    "GetFileAttributesW failed for {}: error {:?}",
                     path.display(),
-                    error.0
+                    error
                 );
                 return Ok(false);
             }
@@ -64,7 +60,7 @@ impl WindowsApi {
         unsafe {
             let handle = CreateFileW(
                 PCWSTR(path_wide.as_ptr()),
-                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 Some(ptr::null()),
                 OPEN_EXISTING,
@@ -73,16 +69,11 @@ impl WindowsApi {
             )?;
 
             let mut buffer = [0u16; 32768]; // MAX_PATH * 4
-            let result = GetFinalPathNameByHandleW(
-                handle,
-                PWSTR(buffer.as_mut_ptr()),
-                buffer.len() as u32,
-                VOLUME_NAME_DOS,
-            );
+            let result = GetFinalPathNameByHandleW(handle, &mut buffer, VOLUME_NAME_DOS);
 
             if result == 0 {
                 let error = GetLastError();
-                error!("GetFinalPathNameByHandleW failed: error {}", error.0);
+                error!("GetFinalPathNameByHandleW failed: error {:?}", error);
                 return Err(anyhow::anyhow!("GetFinalPathNameByHandleW failed"));
             }
 
@@ -96,11 +87,10 @@ impl WindowsApi {
                 .map_err(|_| anyhow::anyhow!("Invalid UTF-16 in path"))?;
 
             // Remove the \\?\ prefix if present
-            let final_path = if final_path.starts_with(r"\\?\") {
-                final_path[4..].to_string()
-            } else {
-                final_path
-            };
+            let final_path = final_path
+                .strip_prefix(r"\\?\")
+                .map(|s| s.to_string())
+                .unwrap_or(final_path);
 
             Ok(PathBuf::from(final_path))
         }
@@ -136,7 +126,7 @@ impl WindowsApi {
 
         unsafe {
             let attributes = GetFileAttributesW(PCWSTR(path_wide.as_ptr()));
-            if attributes == INVALID_HANDLE_VALUE {
+            if attributes == INVALID_FILE_ATTRIBUTES {
                 return Ok(false);
             }
 
@@ -150,7 +140,7 @@ impl WindowsApi {
 
         unsafe {
             let mut attributes = GetFileAttributesW(PCWSTR(path_wide.as_ptr()));
-            if attributes == INVALID_HANDLE_VALUE {
+            if attributes == INVALID_FILE_ATTRIBUTES {
                 return Err(anyhow::anyhow!("Failed to get file attributes"));
             }
 
@@ -160,7 +150,10 @@ impl WindowsApi {
                 attributes &= !FILE_ATTRIBUTE_HIDDEN.0;
             }
 
-            let result = SetFileAttributesW(PCWSTR(path_wide.as_ptr()), attributes);
+            let result = SetFileAttributesW(
+                PCWSTR(path_wide.as_ptr()),
+                FILE_FLAGS_AND_ATTRIBUTES(attributes),
+            );
             if result.is_err() {
                 return Err(anyhow::anyhow!("Failed to set hidden attribute"));
             }
@@ -187,9 +180,12 @@ impl WindowsApi {
             let mut success = Process32First(snapshot, &mut entry);
 
             while success.is_ok() {
-                let exe_file = OsString::from_wide(&entry.szExeFile)
-                    .into_string()
-                    .map_err(|_| anyhow::anyhow!("Invalid UTF-16 in process name"))?;
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let exe_file = String::from_utf8_lossy(&entry.szExeFile[..len]).to_string();
 
                 processes.push(ProcessInfo {
                     pid: entry.th32ProcessID,
@@ -220,7 +216,7 @@ impl WindowsApi {
             // Try to open the file with exclusive access
             let handle = CreateFileW(
                 PCWSTR(path_wide.as_ptr()),
-                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ,
                 Some(ptr::null()),
                 OPEN_EXISTING,
@@ -231,7 +227,7 @@ impl WindowsApi {
             match handle {
                 Ok(h) => {
                     // Successfully opened, not locked
-                    drop(h);
+                    let _ = h;
                     Ok(false)
                 }
                 Err(_) => {
@@ -258,25 +254,25 @@ impl WindowsApi {
                 &mut key_handle,
             );
 
-            if result.0 != 0 {
-                return Err(anyhow::anyhow!("Failed to open registry key: {}", result.0));
+            if result.is_err() {
+                return Err(anyhow::anyhow!("Failed to open registry key"));
             }
 
-            let mut data_type = 0u32;
+            let mut data_type = windows::Win32::System::Registry::REG_VALUE_TYPE(0);
             let mut data_size = 0u32;
 
             // First call to get the required buffer size
             let result = RegQueryValueExW(
                 key_handle,
                 PCWSTR(value_wide.as_ptr()),
-                ptr::null_mut(),
+                None,
                 Some(&mut data_type),
-                ptr::null_mut(),
+                None,
                 Some(&mut data_size),
             );
 
             if result.is_err() || data_size == 0 {
-                RegCloseKey(key_handle);
+                let _ = RegCloseKey(key_handle);
                 return Err(anyhow::anyhow!("Failed to query registry value size"));
             }
 
@@ -285,13 +281,13 @@ impl WindowsApi {
             let result = RegQueryValueExW(
                 key_handle,
                 PCWSTR(value_wide.as_ptr()),
-                ptr::null_mut(),
+                None,
                 Some(&mut data_type),
-                buffer.as_mut_ptr() as *mut _,
+                Some(buffer.as_mut_ptr() as *mut u8),
                 Some(&mut data_size),
             );
 
-            RegCloseKey(key_handle);
+            let _ = RegCloseKey(key_handle);
 
             if result.is_err() {
                 return Err(anyhow::anyhow!("Failed to read registry value"));
@@ -320,8 +316,8 @@ pub struct ProcessInfo {
 }
 
 /// Convert a Rust path to a wide string for Windows API
-fn to_wide(path: &Path) -> Vec<u16> {
-    path.as_os_str()
+fn to_wide(path: impl AsRef<OsStr>) -> Vec<u16> {
+    path.as_ref()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect()

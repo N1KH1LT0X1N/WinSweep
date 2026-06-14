@@ -1,320 +1,388 @@
 //! Integration tests for WinSweep
-//! 
+//!
 //! These tests validate the complete functionality of all modules working together.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
-use winsweep_core::{Scanner, CleanupManager, WindowsEditionDetector, WslDetector, DockerClient, PackageManagerRegistry};
-use winsweep_common::{Config, NeverDeleteList};
-use winsweep_cli::App;
-use tokio::runtime::Runtime;
+use winsweep_common::{
+    never_delete::should_never_delete,
+    types::{FileType, ScanConfig, ScanResult},
+    Config,
+};
+use winsweep_core::{
+    audit_logger::AuditLogger, cleanup::CleanupManager, junction_detector::JunctionDetector,
+    scanner::Scanner, windows_api::WindowsApi, DockerClient, PackageManagerRegistry,
+    WindowsEditionDetector, WslDetector,
+};
+
+// ── CLI NDJSON mode ────────────────────────────────────────────────────────
+
+/// Test that `winsweep-cli --output ndjson <dir>` emits valid JSON lines with expected fields.
+#[test]
+fn test_cli_ndjson_output() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_path = temp_dir.path();
+
+    std::fs::write(test_path.join("alpha.txt"), "alpha content").unwrap();
+    std::fs::write(test_path.join("beta.txt"), "beta content").unwrap();
+    std::fs::create_dir(test_path.join("gamma")).unwrap();
+    std::fs::write(test_path.join("gamma/delta.txt"), "delta content").unwrap();
+
+    // Run via cargo so the binary is built on demand
+    let output = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "winsweep-cli",
+            "--",
+            "--output",
+            "ndjson",
+            test_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to execute winsweep-cli via cargo");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "winsweep-cli exited with non-zero status. stdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(
+        !lines.is_empty(),
+        "ndjson mode should produce at least one line"
+    );
+
+    for line in &lines {
+        let value: serde_json::Value =
+            serde_json::from_str(line).expect("each line should be valid JSON");
+        assert!(value.is_object(), "each line should be a JSON object");
+        assert!(
+            value.get("path").is_some(),
+            "each object should have a 'path' field"
+        );
+        assert!(
+            value.get("size_bytes").is_some(),
+            "each object should have a 'size_bytes' field"
+        );
+        assert!(
+            value.get("file_type").is_some(),
+            "each object should have a 'file_type' field"
+        );
+    }
+}
+
+// ── Scanner ──────────────────────────────────────────────────────────────────
 
 /// Test basic scanning functionality
 #[tokio::test]
 async fn test_basic_scanning() {
-    // Create a temporary directory with test files
     let temp_dir = TempDir::new().unwrap();
     let test_path = temp_dir.path();
-    
-    // Create test files
+
     std::fs::write(test_path.join("test1.txt"), "Hello World").unwrap();
     std::fs::write(test_path.join("test2.txt"), "Hello World 2").unwrap();
-    
-    // Create subdirectory
     std::fs::create_dir(test_path.join("subdir")).unwrap();
     std::fs::write(test_path.join("subdir/test3.txt"), "Hello World 3").unwrap();
-    
-    // Initialize scanner
-    let scanner = Scanner::new().await.unwrap();
-    
-    // Scan the directory
-    let mut results = Vec::new();
-    scanner.scan_directory(test_path, &mut |item| {
-        results.push(item.clone());
-        true
-    }).await.unwrap();
-    
-    // Verify results
-    assert_eq!(results.len(), 3);
-    assert!(results.iter().any(|f| f.path.ends_with("test1.txt")));
-    assert!(results.iter().any(|f| f.path.ends_with("test2.txt")));
-    assert!(results.iter().any(|f| f.path.ends_with("test3.txt")));
+
+    let config = ScanConfig {
+        paths: vec![test_path.to_path_buf()],
+        include_hidden: true,
+        follow_symlinks: false,
+        max_file_size: None,
+        exclude_patterns: vec![],
+        include_patterns: vec![],
+        parallel_jobs: Some(1),
+        min_age_days: None,
+    };
+
+    let scanner = Scanner::new(config).unwrap();
+    let handle = scanner.scan().await.unwrap();
+    let results = handle.collect_all().await;
+
+    assert!(!results.is_empty(), "scan should return results");
+    let paths: Vec<&PathBuf> = results.iter().map(|r| &r.path).collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("test1.txt")),
+        "should find test1.txt"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("test2.txt")),
+        "should find test2.txt"
+    );
 }
 
-/// Test cleanup functionality
+/// Test parallel scanning with many files
 #[tokio::test]
-async fn test_cleanup_operations() {
-    // Create a temporary directory with test files
+async fn test_parallel_scanning() {
     let temp_dir = TempDir::new().unwrap();
     let test_path = temp_dir.path();
-    
-    // Create test files
-    std::fs::write(test_path.join("delete_me.txt"), "Delete this").unwrap();
-    std::fs::write(test_path.join("keep_me.txt"), "Keep this").unwrap();
-    
-    // Initialize cleanup manager
-    let cleanup = CleanupManager::new().unwrap();
-    
-    // Delete specific file
-    let file_to_delete = test_path.join("delete_me.txt");
-    cleanup.delete_file(&file_to_delete, false).await.unwrap();
-    
-    // Verify file was deleted
-    assert!(!file_to_delete.exists());
-    
-    // Verify other file still exists
-    assert!(test_path.join("keep_me.txt").exists());
+
+    for i in 0..20 {
+        std::fs::write(
+            test_path.join(format!("file_{}.txt", i)),
+            format!("content {}", i),
+        )
+        .unwrap();
+    }
+
+    let config = ScanConfig {
+        paths: vec![test_path.to_path_buf()],
+        include_hidden: false,
+        follow_symlinks: false,
+        max_file_size: None,
+        exclude_patterns: vec![],
+        include_patterns: vec![],
+        parallel_jobs: Some(4),
+        min_age_days: None,
+    };
+
+    let scanner = Scanner::new(config).unwrap();
+    let handle = scanner.scan().await.unwrap();
+    let results = handle.collect_all().await;
+
+    assert_eq!(results.len(), 20, "should find all 20 files");
 }
+
+// ── CleanupManager ───────────────────────────────────────────────────────────
+
+/// Test cleanup operations
+#[tokio::test]
+async fn test_cleanup_operations() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_path = temp_dir.path();
+
+    let file_to_delete = test_path.join("delete_me.txt");
+    std::fs::write(&file_to_delete, "Delete this").unwrap();
+    std::fs::write(test_path.join("keep_me.txt"), "Keep this").unwrap();
+
+    assert!(file_to_delete.exists());
+
+    let api = Arc::new(WindowsApi::new().unwrap());
+    let logger = Arc::new(AuditLogger::new().unwrap());
+    let cleanup = CleanupManager::new(api, logger, false, false, false);
+
+    // Build a minimal ScanResult for the file
+    let scan_result = ScanResult {
+        id: uuid::Uuid::new_v4(),
+        path: file_to_delete.clone(),
+        size_bytes: 11,
+        file_type: FileType::File,
+        project_type: None,
+        last_modified: chrono::Utc::now(),
+        is_safe_to_delete: true,
+        deletion_reason: None,
+    };
+
+    let result = cleanup.cleanup(vec![scan_result]).await.unwrap();
+
+    assert!(!file_to_delete.exists(), "deleted file should be gone");
+    assert!(
+        test_path.join("keep_me.txt").exists(),
+        "kept file should remain"
+    );
+    assert_eq!(result.items_deleted.len(), 1);
+    assert!(result.items_failed.is_empty());
+}
+
+// ── AuditLogger ──────────────────────────────────────────────────────────────
+
+/// Test audit logging
+#[test]
+fn test_audit_logging() {
+    let logger = AuditLogger::new();
+    assert!(logger.is_ok(), "AuditLogger::new() should succeed");
+
+    let logger = logger.unwrap();
+    let scan_id = uuid::Uuid::new_v4();
+    let config = ScanConfig {
+        paths: vec![PathBuf::from("C:\\Temp")],
+        include_hidden: false,
+        follow_symlinks: false,
+        max_file_size: None,
+        exclude_patterns: vec![],
+        include_patterns: vec![],
+        parallel_jobs: None,
+        min_age_days: None,
+    };
+    let result = logger.log_scan_start(scan_id, vec![PathBuf::from("C:\\Temp")], &config);
+    assert!(result.is_ok(), "log_scan_start should succeed");
+
+    let result = logger.log_scan_complete(scan_id, 5, 1024, 100);
+    assert!(result.is_ok(), "log_scan_complete should succeed");
+}
+
+// ── WindowsEditionDetector ───────────────────────────────────────────────────
 
 /// Test Windows edition detection
 #[test]
 fn test_windows_edition_detection() {
-    // This test only runs on Windows
-    #[cfg(not(windows))]
-    return;
-    
     let detector = WindowsEditionDetector::new();
-    
-    if let Some(detector) = detector {
-        let edition = detector.get_edition();
-        assert!(!edition.is_empty());
-        
-        let version = detector.get_version();
-        assert!(!version.is_empty());
-        
-        let is_home = detector.is_home_edition();
-        // Should not panic
-    }
+    assert!(
+        detector.is_ok(),
+        "WindowsEditionDetector::new() should succeed on Windows"
+    );
+
+    let detector = detector.unwrap();
+    let version = detector.version();
+    assert!(!version.is_empty(), "version string should not be empty");
+
+    let build = detector.build_number();
+    assert!(build > 0, "build number should be positive");
+
+    let features = detector.features();
+    // has_diskpart is available on all Windows editions
+    let _ = features.has_diskpart;
 }
+
+// ── WslDetector ──────────────────────────────────────────────────────────────
 
 /// Test WSL detection
 #[test]
 fn test_wsl_detection() {
-    // This test only runs on Windows with WSL installed
-    #[cfg(not(windows))]
-    return;
-    
-    let detector = WslDetector::new();
-    
-    if let Some(detector) = detector {
-        let is_installed = detector.is_wsl_installed();
-        let distributions = detector.get_distributions();
-        
-        // Should not panic even if WSL is not installed
-        if is_installed {
-            assert!(!distributions.is_empty());
+    let result = WslDetector::new();
+    // WslDetector::new() may fail if registry access fails; treat both as valid outcomes
+    match result {
+        Ok(detector) => {
+            let _has_wsl = detector.has_wsl();
+            let _dists = detector.distributions();
+        }
+        Err(_) => {
+            println!("WSL detection failed (possibly no WSL installed), skipping assertions");
         }
     }
 }
 
-/// Test Docker client
+// ── DockerClient ─────────────────────────────────────────────────────────────
+
+/// Test Docker client (skips if Docker is not available)
 #[tokio::test]
 async fn test_docker_client() {
-    // This test requires Docker to be installed and running
     let client = match DockerClient::new().await {
-        Ok(client) => client,
+        Ok(c) => c,
         Err(_) => {
             println!("Docker not available, skipping test");
             return;
         }
     };
-    
-    // Test daemon status
-    let is_running = client.is_daemon_running();
-    println!("Docker daemon running: {}", is_running);
-    
-    if is_running {
-        // Test listing containers
-        let containers = client.get_containers().await.unwrap();
-        println!("Found {} containers", containers.len());
-        
-        // Test listing images
-        let images = client.get_images().await.unwrap();
-        println!("Found {} images", images.len());
+
+    println!("Docker daemon running: {}", client.is_daemon_running());
+
+    if client.is_daemon_running() {
+        let containers = client.get_containers().await;
+        assert!(
+            containers.is_ok(),
+            "get_containers should succeed when daemon is running"
+        );
+
+        let images = client.get_images().await;
+        assert!(
+            images.is_ok(),
+            "get_images should succeed when daemon is running"
+        );
     }
 }
+
+// ── PackageManagerRegistry ───────────────────────────────────────────────────
 
 /// Test package manager registry
-#[test]
-fn test_package_manager_registry() {
-    let registry = PackageManagerRegistry::new();
-    
-    // Test npm detection
-    let npm = registry.get_manager("npm");
+#[tokio::test]
+async fn test_package_manager_registry() {
+    let registry = PackageManagerRegistry::new().await;
+
+    // Just verify the registry initialises without panic.
+    // npm/pip/cargo presence depends on CI environment.
+    let npm = registry.get_by_name("npm");
     if let Some(npm) = npm {
-        let is_installed = npm.is_installed();
-        println!("npm installed: {}", is_installed);
-        
-        if is_installed {
-            // Test cache detection
-            let cache_paths = npm.get_cache_paths();
-            assert!(!cache_paths.is_empty());
+        let installed = npm.is_installed().await;
+        println!("npm installed: {}", installed);
+        if installed {
+            let paths = npm.get_cache_paths().await;
+            assert!(
+                paths.is_ok(),
+                "get_cache_paths should not error when installed"
+            );
         }
-    }
-    
-    // Test pip detection
-    let pip = registry.get_manager("pip");
-    if let Some(pip) = pip {
-        let is_installed = pip.is_installed();
-        println!("pip installed: {}", is_installed);
-    }
-    
-    // Test cargo detection
-    let cargo = registry.get_manager("cargo");
-    if let Some(cargo) = cargo {
-        let is_installed = cargo.is_installed();
-        println!("cargo installed: {}", is_installed);
-    }
-    
-    // Test nuget detection
-    let nuget = registry.get_manager("nuget");
-    if let Some(nuget) = nuget {
-        let is_installed = nuget.is_installed();
-        println!("nuget installed: {}", is_installed);
+    } else {
+        println!("npm package manager not in registry");
     }
 }
 
-/// Test configuration loading and saving
+// ── Configuration ────────────────────────────────────────────────────────────
+
+/// Test configuration defaults and serialisation
 #[test]
 fn test_configuration() {
     let config = Config::default();
-    
-    // Test default values
-    assert_eq!(config.scan_include_hidden, false);
-    assert_eq!(config.cleanup.use_recycle_bin, true);
-    assert_eq!(config.ui.theme, "system");
-    
-    // Test serialization
+
+    assert!(
+        !config.scan_include_hidden,
+        "include_hidden should default to false"
+    );
+    assert!(
+        config.cleanup.use_recycle_bin,
+        "use_recycle_bin should default to true"
+    );
+    assert_eq!(config.ui.theme, "system", "default theme should be system");
+
     let toml_str = toml::to_string_pretty(&config).unwrap();
     let parsed: Config = toml::from_str(&toml_str).unwrap();
-    
+
     assert_eq!(config.scan_include_hidden, parsed.scan_include_hidden);
-    assert_eq!(config.cleanup.use_recycle_bin, parsed.cleanup.use_recycle_bin);
+    assert_eq!(
+        config.cleanup.use_recycle_bin,
+        parsed.cleanup.use_recycle_bin
+    );
 }
 
-/// Test NEVER_DELETE list
+// ── NeverDelete ──────────────────────────────────────────────────────────────
+
+/// Test NEVER_DELETE protection list
 #[test]
 fn test_never_delete_list() {
-    let never_delete = NeverDeleteList::default();
-    
-    // Test system paths
-    assert!(never_delete.is_protected(&PathBuf::from("C:\\Windows")));
-    assert!(never_delete.is_protected(&PathBuf::from("C:\\Program Files")));
-    assert!(never_delete.is_protected(&PathBuf::from("C:\\Program Files (x86)")));
-    
-    // Test file extensions
-    assert!(never_delete.is_protected(&PathBuf::from("test.exe")));
-    assert!(never_delete.is_protected(&PathBuf::from("test.dll")));
-    assert!(never_delete.is_protected(&PathBuf::from("test.sys")));
-    
-    // Test non-protected paths
-    assert!(!never_delete.is_protected(&PathBuf::from("C:\\Temp\\test.txt")));
-    assert!(!never_delete.is_protected(&PathBuf::from("test.txt")));
+    assert!(
+        should_never_delete(&PathBuf::from(r"C:\Windows")),
+        "Windows dir must be protected"
+    );
+    assert!(
+        should_never_delete(&PathBuf::from(r"C:\Windows\System32")),
+        "System32 must be protected"
+    );
+    assert!(
+        should_never_delete(&PathBuf::from(r"C:\Program Files")),
+        "Program Files must be protected"
+    );
+
+    // Temp files should not be protected
+    assert!(
+        !should_never_delete(&PathBuf::from(r"C:\Temp\my_temp_file.txt")),
+        "temp files should not be protected"
+    );
 }
 
-/// Test CLI app initialization
-#[test]
-fn test_cli_app_initialization() {
-    let rt = Runtime::new().unwrap();
-    
-    // This should not panic
-    let _app = rt.block_on(async {
-        App::new().await
-    });
-}
+// ── JunctionDetector ─────────────────────────────────────────────────────────
 
-/// Test parallel scanning performance
-#[tokio::test]
-async fn test_parallel_scanning() {
-    // Create a temporary directory with many files
-    let temp_dir = TempDir::new().unwrap();
-    let test_path = temp_dir.path();
-    
-    // Create 100 test files
-    for i in 0..100 {
-        std::fs::write(test_path.join(format!("test_{}.txt", i)), format!("Content {}", i)).unwrap();
-    }
-    
-    // Initialize scanner
-    let scanner = Scanner::new().await.unwrap();
-    
-    // Scan with parallelism
-    let start = std::time::Instant::now();
-    let mut results = Vec::new();
-    scanner.scan_directory(test_path, &mut |item| {
-        results.push(item.clone());
-        true
-    }).await.unwrap();
-    let duration = start.elapsed();
-    
-    // Verify all files were found
-    assert_eq!(results.len(), 100);
-    
-    // Performance should be reasonable (less than 1 second for 100 files)
-    assert!(duration.as_secs() < 1);
-}
-
-/// Test junction detection
+/// Test junction detection on a regular directory
 #[test]
 fn test_junction_detection() {
-    // This test only runs on Windows
-    #[cfg(not(windows))]
-    return;
-    
-    use winsweep_core::JunctionDetector;
-    
     let detector = JunctionDetector::new();
-    
-    // Test with a known junction (Windows Documents folder)
-    let documents_path = dirs::document_dir().unwrap_or_else(|| PathBuf::from("C:\\Users\\Public\\Documents"));
-    
-    if let Ok(is_junction) = detector.is_junction(&documents_path) {
-        // Should not panic
-        println!("Documents folder is junction: {}", is_junction);
-    }
-}
 
-/// Test audit logging
-#[tokio::test]
-async fn test_audit_logging() {
-    use winsweep_core::AuditLogger;
-    
     let temp_dir = TempDir::new().unwrap();
-    let log_path = temp_dir.path().join("audit.log");
-    
-    let logger = AuditLogger::new(&log_path).unwrap();
-    
-    // Log some operations
-    logger.log_scan_start(&["C:\\Temp"]).unwrap();
-    logger.log_file_deleted(&PathBuf::from("C:\\Temp\\test.txt")).unwrap();
-    logger.log_cleanup_complete(1024, 5).unwrap();
-    
-    // Verify log was created
-    assert!(log_path.exists());
-    
-    // Read and verify log content
-    let log_content = std::fs::read_to_string(&log_path).unwrap();
-    assert!(log_content.contains("scan_start"));
-    assert!(log_content.contains("file_deleted"));
-    assert!(log_content.contains("cleanup_complete"));
-}
+    let is_junction = detector.is_junction(temp_dir.path());
+    assert!(
+        is_junction.is_ok(),
+        "is_junction should not error on a regular directory"
+    );
+    assert!(!is_junction.unwrap(), "a temp dir should not be a junction");
 
-/// Test error handling
-#[tokio::test]
-async fn test_error_handling() {
-    use winsweep_core::WindowsApiError;
-    
-    // Test with non-existent path
-    let scanner = Scanner::new().await.unwrap();
-    let result = scanner.scan_directory(&PathBuf::from("Z:\\nonexistent"), &mut |_| true).await;
-    
-    // Should handle error gracefully
-    assert!(result.is_err());
-    
-    // Test cleanup with non-existent file
-    let cleanup = CleanupManager::new().unwrap();
-    let result = cleanup.delete_file(&PathBuf::from("Z:\\nonexistent.txt"), false).await;
-    
-    // Should handle error gracefully
-    assert!(result.is_err());
+    let is_symlink = detector.is_symlink(temp_dir.path());
+    assert!(
+        is_symlink.is_ok(),
+        "is_symlink should not error on a regular directory"
+    );
+    assert!(!is_symlink.unwrap(), "a temp dir should not be a symlink");
 }

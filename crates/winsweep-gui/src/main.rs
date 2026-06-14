@@ -5,6 +5,9 @@
 
 mod app;
 mod elevated_coordinator;
+mod notifications;
+mod scheduler;
+mod util;
 mod viewmodel;
 mod views;
 
@@ -13,8 +16,9 @@ mod tray;
 
 use anyhow::Result;
 use app::WinSweepApp;
+use clap::Parser;
 use eframe::egui;
-use tracing::{error, info, Level};
+use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(clap::Parser, Debug)]
@@ -57,17 +61,42 @@ fn main() -> Result<()> {
     };
 
     // Run the GUI application
-    let rt = tokio::runtime::Runtime::new()?;
-    let app = rt.block_on(async { WinSweepApp::new().await })?;
+    // Leak the runtime so it stays alive for the app lifetime.
+    let rt: &'static tokio::runtime::Runtime = Box::leak(Box::new(tokio::runtime::Runtime::new()?));
+    let mut app = rt.block_on(async { WinSweepApp::new(rt).await })?;
 
     eframe::run_native(
         "WinSweep",
         options,
-        Box::new(|_cc| {
-            // This is where you can customize egui setup
-            Box::new(app)
+        Box::new(|cc| {
+            // Load persisted state and restore skipped runtime / coordinator fields
+            if let Some(storage) = cc.storage {
+                if let Some(vm) = eframe::get_value(storage, eframe::APP_KEY) {
+                    // Capture non-persisted fields before overwriting the viewmodel
+                    let wsl_detector = app.viewmodel.wsl_detector.take();
+                    let docker_client = app.viewmodel.docker_client.take();
+                    let windows_detector = app.viewmodel.windows_detector.take();
+                    let home_edition_compat = app.viewmodel.home_edition_compat.take();
+                    let package_manager_registry =
+                        std::mem::take(&mut app.viewmodel.package_manager_registry);
+
+                    app.viewmodel = vm;
+
+                    // Re-attach the captured fields
+                    app.viewmodel.wsl_detector = wsl_detector;
+                    app.viewmodel.docker_client = docker_client;
+                    app.viewmodel.windows_detector = windows_detector;
+                    app.viewmodel.home_edition_compat = home_edition_compat;
+                    app.viewmodel.package_manager_registry = package_manager_registry;
+                    app.viewmodel.runtime = Some(rt);
+                    app.viewmodel.elevated_coordinator =
+                        Some(crate::elevated_coordinator::ElevatedCoordinator::new());
+                }
+            }
+            Ok(Box::new(app))
         }),
-    )?;
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     Ok(())
 }

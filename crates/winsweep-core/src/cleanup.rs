@@ -6,7 +6,6 @@
 use crate::audit_logger::AuditLogger;
 use crate::windows_api::WindowsApi;
 use anyhow::{Context, Result};
-use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -22,7 +21,7 @@ pub struct CleanupManager {
     windows_api: Arc<WindowsApi>,
     audit_logger: Arc<AuditLogger>,
     use_recycle_bin: bool,
-    require_confirmation: bool,
+    dry_run: bool,
 }
 
 impl CleanupManager {
@@ -31,13 +30,14 @@ impl CleanupManager {
         windows_api: Arc<WindowsApi>,
         audit_logger: Arc<AuditLogger>,
         use_recycle_bin: bool,
-        require_confirmation: bool,
+        _require_confirmation: bool,
+        dry_run: bool,
     ) -> Self {
         Self {
             windows_api,
             audit_logger,
             use_recycle_bin,
-            require_confirmation,
+            dry_run,
         }
     }
 
@@ -67,6 +67,17 @@ impl CleanupManager {
                 continue;
             }
 
+            // Respect scan result safety flag
+            if !item.is_safe_to_delete {
+                warn!("Skipping unsafe item: {}", item.path.display());
+                let reason = item
+                    .deletion_reason
+                    .clone()
+                    .unwrap_or_else(|| "Not safe to delete".to_string());
+                items_failed.push((item.path.clone(), reason));
+                continue;
+            }
+
             // Check if file is locked
             if self.windows_api.is_file_locked(&item.path)? {
                 warn!("File is locked: {}", item.path.display());
@@ -74,22 +85,28 @@ impl CleanupManager {
                 continue;
             }
 
-            // Perform deletion
-            match self.delete_item(&item.path, item.size_bytes).await {
-                Ok(_) => {
-                    items_deleted.push(item.path.clone());
-                    space_freed += item.size_bytes;
+            // Perform deletion (or simulate in dry-run mode)
+            if self.dry_run {
+                items_deleted.push(item.path.clone());
+                space_freed += item.size_bytes;
+                info!("[dry-run] Would delete: {}", item.path.display());
+            } else {
+                match self.delete_item(&item.path, item.size_bytes).await {
+                    Ok(_) => {
+                        items_deleted.push(item.path.clone());
+                        space_freed += item.size_bytes;
 
-                    // Log successful deletion
-                    self.audit_logger.log_file_deletion(
-                        item.path.clone(),
-                        item.size_bytes,
-                        self.use_recycle_bin,
-                    )?;
-                }
-                Err(e) => {
-                    error!("Failed to delete {}: {}", item.path.display(), e);
-                    items_failed.push((item.path.clone(), e.to_string()));
+                        // Log successful deletion
+                        self.audit_logger.log_file_deletion(
+                            item.path.clone(),
+                            item.size_bytes,
+                            self.use_recycle_bin,
+                        )?;
+                    }
+                    Err(e) => {
+                        error!("Failed to delete {}: {}", item.path.display(), e);
+                        items_failed.push((item.path.clone(), e.to_string()));
+                    }
                 }
             }
         }
@@ -120,7 +137,7 @@ impl CleanupManager {
     }
 
     /// Delete a single file or directory
-    async fn delete_item(&self, path: &Path, size_bytes: u64) -> Result<()> {
+    async fn delete_item(&self, path: &Path, _size_bytes: u64) -> Result<()> {
         debug!("Deleting: {}", path.display());
 
         if self.use_recycle_bin {
@@ -132,30 +149,55 @@ impl CleanupManager {
 
     /// Move item to recycle bin
     async fn move_to_recycle_bin(&self, path: &Path) -> Result<()> {
-        // Use Windows Shell API to move to recycle bin
-        // For now, we'll implement a simple version using PowerShell
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            #[cfg(windows)]
+            {
+                use std::os::windows::ffi::OsStrExt;
+                use windows_sys::Win32::UI::Shell::{
+                    SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FO_DELETE,
+                    SHFILEOPSTRUCTW,
+                };
 
-        let ps_script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.SendKeys]::SendWait('{{}}'); $shell = New-Object -ComObject Shell.Application; $item = $shell.Namespace('{}').ParseName('{}'); $item.InvokeVerb('Delete')",
-            path.parent().unwrap_or_else(|| Path::new("")).display(),
-            path.file_name().unwrap_or_default().to_string_lossy()
-        );
+                // Double-null-terminated wide path (required by SHFileOperationW)
+                let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+                path_wide.push(0); // null terminator for the path
+                path_wide.push(0); // extra null to terminate the file list
 
-        let output = tokio::process::Command::new("powershell")
-            .arg("-Command")
-            .arg(ps_script)
-            .output()
-            .await
-            .context("Failed to execute PowerShell for recycle bin")?;
+                let mut operation = SHFILEOPSTRUCTW {
+                    hwnd: std::ptr::null_mut(),
+                    wFunc: FO_DELETE,
+                    pFrom: path_wide.as_ptr(),
+                    pTo: std::ptr::null(),
+                    fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT) as u16,
+                    fAnyOperationsAborted: 0,
+                    hNameMappings: std::ptr::null_mut(),
+                    lpszProgressTitle: std::ptr::null(),
+                };
 
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "PowerShell failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        Ok(())
+                unsafe {
+                    let result = SHFileOperationW(&mut operation);
+                    if result == 0 {
+                        Ok(())
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "SHFileOperationW failed with error code {}",
+                            result
+                        ))
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                if path.is_dir() {
+                    std::fs::remove_dir_all(&path).map_err(Into::into)
+                } else {
+                    std::fs::remove_file(&path).map_err(Into::into)
+                }
+            }
+        })
+        .await
+        .context("spawn_blocking failed")?
     }
 
     /// Permanently delete an item
@@ -219,6 +261,7 @@ impl CleanupManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use tempfile::TempDir;
     use winsweep_common::types::{FileType, ProjectType};
 
@@ -236,6 +279,7 @@ mod tests {
             audit_logger,
             false, // Don't use recycle bin in test
             false, // Don't require confirmation
+            false, // Not a dry run
         );
 
         let scan_result = ScanResult {
@@ -268,7 +312,7 @@ mod tests {
         let windows_api = Arc::new(WindowsApi::new().unwrap());
         let audit_logger = Arc::new(AuditLogger::new().unwrap());
 
-        let manager = CleanupManager::new(windows_api, audit_logger, false, false);
+        let manager = CleanupManager::new(windows_api, audit_logger, false, false, false);
 
         let scan_result = ScanResult {
             id: Uuid::new_v4(),

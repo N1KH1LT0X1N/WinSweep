@@ -8,17 +8,64 @@ use crate::windows_api::WindowsApi;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use winsweep_common::{
     never_delete::should_never_delete,
     project_signatures::detect_project_type,
-    types::{FileType, ScanConfig, ScanResult},
+    types::{FileType, ProjectType, ScanConfig, ScanResult},
 };
+
+/// Known artifact directories that should be reported as a single aggregated entry
+/// rather than recursed into file-by-file.
+///
+/// Each entry is `(directory_name, lock_file_hint, project_type)`.
+/// `lock_file_hint` is the name of the adjacent lock/manifest file whose mtime is
+/// used as the "last project activity" age proxy.
+static ARTIFACT_DIRS: &[(&str, &str, ProjectType)] = &[
+    // JavaScript / Node
+    ("node_modules", "package-lock.json", ProjectType::NodeJs),
+    (".npm", "package.json", ProjectType::NodeJs),
+    (".pnpm-store", "pnpm-lock.yaml", ProjectType::NodeJs),
+    // Rust
+    ("target", "Cargo.lock", ProjectType::Rust),
+    // Python
+    (".venv", "requirements.txt", ProjectType::Python),
+    ("venv", "requirements.txt", ProjectType::Python),
+    (".tox", "tox.ini", ProjectType::Python),
+    ("__pycache__", "*.py", ProjectType::Python),
+    (".pytest_cache", "pytest.ini", ProjectType::Python),
+    (".mypy_cache", "mypy.ini", ProjectType::Python),
+    // Java / JVM
+    (".gradle", "build.gradle", ProjectType::Gradle),
+    ("build", "build.gradle", ProjectType::Gradle),
+    (".m2", "pom.xml", ProjectType::Maven),
+    ("target", "pom.xml", ProjectType::Maven),
+    // Go
+    (".cache", "go.sum", ProjectType::Go),
+    // .NET
+    ("bin", "*.csproj", ProjectType::DotNet),
+    ("obj", "*.csproj", ProjectType::DotNet),
+    (".nuget", "*.csproj", ProjectType::DotNet),
+    // Flutter / Dart
+    (".dart_tool", "pubspec.lock", ProjectType::Flutter),
+    ("build", "pubspec.yaml", ProjectType::Flutter),
+    // Android
+    (".gradle", "settings.gradle", ProjectType::Android),
+    ("build", "AndroidManifest.xml", ProjectType::Android),
+    // Nx / Turborepo
+    (".nx", "nx.json", ProjectType::NodeJs),
+    (".turbo", "turbo.json", ProjectType::NodeJs),
+    // C/C++
+    ("CMakeFiles", "CMakeLists.txt", ProjectType::CMake),
+    // Unity
+    ("Library", "ProjectSettings", ProjectType::Unity),
+    ("Temp", "ProjectSettings", ProjectType::Unity),
+];
 
 /// Scanner for traversing file systems in parallel
 pub struct Scanner {
@@ -38,7 +85,7 @@ impl Scanner {
     /// Create a new scanner with the given configuration
     pub fn new(config: ScanConfig) -> Result<Self> {
         let windows_api = Arc::new(WindowsApi::new()?);
-        let junction_detector = Arc::new(JunctionDetector::new(windows_api.clone()));
+        let junction_detector = Arc::new(JunctionDetector::new());
 
         Ok(Self {
             config,
@@ -142,6 +189,16 @@ impl ScannerHandle {
         self.receiver.recv().await
     }
 
+    /// Try to get the next scan result without blocking
+    pub fn try_recv(&mut self) -> Option<ScanResult> {
+        self.receiver.try_recv().ok()
+    }
+
+    /// Check whether the background scan task has finished
+    pub fn is_finished(&self) -> bool {
+        self._join_handle.is_finished()
+    }
+
     /// Get all remaining scan results
     pub async fn collect_all(self) -> Vec<ScanResult> {
         let mut results = Vec::new();
@@ -158,11 +215,14 @@ impl ScannerHandle {
     }
 }
 
-/// Recursively scan a directory
+/// Recursively scan a directory, emitting a single aggregated `ScanResult` for every
+/// known artifact sub-directory encountered (e.g. `node_modules`, `target`, `.gradle`).
+/// Regular files and unknown directories are also reported individually so callers have
+/// full visibility.
 async fn scan_directory_recursive(
     dir: &Path,
     config: &ScanConfig,
-    windows_api: &WindowsApi,
+    _windows_api: &WindowsApi,
     junction_detector: &JunctionDetector,
     sender: &mpsc::UnboundedSender<ScanResult>,
 ) -> Result<()> {
@@ -181,8 +241,8 @@ async fn scan_directory_recursive(
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
 
-        // Skip hidden files if requested
-        if !config.include_hidden && is_hidden(&path) {
+        // Skip hidden files if requested (but not dot-named artifact dirs)
+        if !config.include_hidden && is_hidden(&path) && !is_known_artifact_dir(&path) {
             continue;
         }
 
@@ -200,7 +260,7 @@ async fn scan_directory_recursive(
             }
 
             // Always scan junctions as they're local
-            if let Ok(result) = scan_file(&path, windows_api, junction_detector).await {
+            if let Ok(result) = scan_file(&path, _windows_api, junction_detector).await {
                 let _ = sender.send(result);
             }
 
@@ -208,19 +268,33 @@ async fn scan_directory_recursive(
         }
 
         if path.is_dir() {
-            subdirs.push(path);
+            // Check if this is a well-known artifact directory
+            if let Some(artifact_result) =
+                try_scan_artifact_dir(&path, dir, config, junction_detector).await
+            {
+                let _ = sender.send(artifact_result);
+                // Do NOT recurse — we already aggregated the whole subtree
+            } else {
+                subdirs.push(path);
+            }
         } else {
-            // Scan file
-            if let Ok(result) = scan_file(&path, windows_api, junction_detector).await {
+            // Scan regular file
+            if let Ok(result) = scan_file(&path, _windows_api, junction_detector).await {
                 let _ = sender.send(result);
             }
         }
     }
 
-    // Recursively scan subdirectories
+    // Recursively scan non-artifact subdirectories
     for subdir in subdirs {
-        if let Err(e) =
-            Box::pin(scan_directory_recursive(&subdir, config, windows_api, junction_detector, sender)).await
+        if let Err(e) = Box::pin(scan_directory_recursive(
+            &subdir,
+            config,
+            _windows_api,
+            junction_detector,
+            sender,
+        ))
+        .await
         {
             error!("Error scanning {}: {}", subdir.display(), e);
         }
@@ -229,10 +303,122 @@ async fn scan_directory_recursive(
     Ok(())
 }
 
+/// Return `true` if `path` is one of the well-known artifact directory names.
+fn is_known_artifact_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|name| {
+            ARTIFACT_DIRS
+                .iter()
+                .any(|(artifact, _, _)| *artifact == name)
+        })
+        .unwrap_or(false)
+}
+
+/// If `path` is a known artifact directory, compute its total size and return a
+/// single aggregated `ScanResult`.  Returns `None` if it is not a recognised
+/// artifact directory or if the age filter rejects it.
+async fn try_scan_artifact_dir(
+    path: &Path,
+    parent: &Path,
+    config: &ScanConfig,
+    junction_detector: &JunctionDetector,
+) -> Option<ScanResult> {
+    let dir_name = path.file_name()?.to_str()?;
+
+    // Find the first matching artifact rule where the sibling lock file also exists
+    let matched = ARTIFACT_DIRS.iter().find(|(artifact, lock_hint, _)| {
+        if *artifact != dir_name {
+            return false;
+        }
+        // If the lock hint contains a glob, just match by artifact name
+        if lock_hint.contains('*') {
+            return true;
+        }
+        // Otherwise require the sibling file to exist
+        parent.join(lock_hint).exists()
+    });
+
+    let (_, lock_hint, project_type) = matched?;
+
+    // Age filter: find the sibling lock/manifest file and compare its mtime
+    if let Some(min_age) = config.min_age_days {
+        let lock_path = if lock_hint.contains('*') {
+            // No specific lock file — use the artifact dir mtime itself
+            path.to_path_buf()
+        } else {
+            parent.join(lock_hint)
+        };
+
+        if let Ok(meta) = std::fs::metadata(&lock_path) {
+            if let Ok(modified) = meta.modified() {
+                let age = modified.elapsed().unwrap_or(Duration::ZERO);
+                let threshold = Duration::from_secs(min_age as u64 * 86_400);
+                if age < threshold {
+                    debug!(
+                        "Skipping {} — lock file newer than {} days",
+                        path.display(),
+                        min_age
+                    );
+                    return None;
+                }
+            }
+        }
+    }
+
+    // Skip junctions/symlinks inside artifact dirs
+    if junction_detector.is_reparse_point(path).unwrap_or(false) {
+        return None;
+    }
+
+    // Aggregate size of the entire subtree
+    let size_bytes = dir_size_sync(path);
+
+    let last_modified = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(DateTime::<Utc>::from)
+        .unwrap_or_else(Utc::now);
+
+    let is_safe_to_delete = !should_never_delete(&path.to_path_buf());
+    let deletion_reason = if !is_safe_to_delete {
+        Some("In NEVER_DELETE list".to_string())
+    } else {
+        None
+    };
+
+    Some(ScanResult {
+        id: Uuid::new_v4(),
+        path: path.to_path_buf(),
+        size_bytes,
+        file_type: FileType::Directory,
+        project_type: Some(*project_type),
+        last_modified,
+        is_safe_to_delete,
+        deletion_reason,
+    })
+}
+
+/// Synchronously walk a directory tree and sum file sizes.
+fn dir_size_sync(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size_sync(&p);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
 /// Scan a single file or directory
 async fn scan_file(
     path: &Path,
-    windows_api: &WindowsApi,
+    _windows_api: &WindowsApi,
     junction_detector: &JunctionDetector,
 ) -> Result<ScanResult> {
     let metadata = tokio::fs::metadata(path)
@@ -242,7 +428,7 @@ async fn scan_file(
     let size_bytes = metadata.len();
     let last_modified = metadata
         .modified()
-        .map(|t| DateTime::<Utc>::from(t))
+        .map(DateTime::<Utc>::from)
         .unwrap_or_else(|_| Utc::now());
 
     let file_type = if path.is_dir() {
@@ -357,7 +543,7 @@ mod tests {
             results.push(result);
         }
 
-        // Should have 3 results (2 files + 1 directory)
-        assert_eq!(results.len(), 3);
+        // Should have 2 results (2 files; directory itself is not reported)
+        assert_eq!(results.len(), 2);
     }
 }

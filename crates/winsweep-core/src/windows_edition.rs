@@ -5,7 +5,6 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 /// Windows edition types
@@ -285,10 +284,13 @@ impl WindowsEditionDetector {
         let api = WindowsApi::new()?;
 
         // Check for WSL feature in registry
-        if let Ok(_) = api.read_registry_string(
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\AppModel\StateRepository",
-            "PackageFamilyList",
-        ) {
+        if api
+            .read_registry_string(
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\AppModel\StateRepository",
+                "PackageFamilyList",
+            )
+            .is_ok()
+        {
             return Ok(true);
         }
 
@@ -307,10 +309,13 @@ impl WindowsEditionDetector {
         let api = WindowsApi::new()?;
 
         // Check for WSL2 kernel
-        if let Ok(_) = api.read_registry_string(
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss",
-            "DefaultDistribution",
-        ) {
+        if api
+            .read_registry_string(
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss",
+                "DefaultDistribution",
+            )
+            .is_ok()
+        {
             return Ok(true);
         }
 

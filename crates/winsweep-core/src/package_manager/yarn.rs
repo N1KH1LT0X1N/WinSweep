@@ -1,7 +1,9 @@
 //! Yarn package manager cache cleanup
 
-use crate::package_manager::{PackageCleanResult, PackageManager};
-use anyhow::{Context, Result};
+use crate::package_manager::{CacheInfo, PackageCleanResult, PackageManager};
+use anyhow::Context;
+use anyhow::Result;
+use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -85,12 +87,13 @@ impl YarnManager {
     }
 }
 
+#[async_trait]
 impl PackageManager for YarnManager {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "yarn"
     }
 
-    fn display_name(&self) -> &str {
+    fn display_name(&self) -> &'static str {
         if self.is_berry {
             "Yarn Berry"
         } else {
@@ -180,6 +183,13 @@ impl PackageManager for YarnManager {
     }
 
     async fn clean_all_caches(&self) -> Result<PackageCleanResult> {
+        if self.is_berry {
+            // Safety: skip any project-local .yarn/cache that is a zero-installs setup
+            let home_dir = dirs::home_dir().unwrap_or_default();
+            let global_cache = home_dir.join(".yarn/berry/cache");
+            // Only the global cache is safe to delete unconditionally
+            let _ = global_cache; // used below in clean_cache flow
+        }
         self.clean_cache(false).await
     }
 
@@ -223,19 +233,50 @@ impl PackageManager for YarnManager {
         for path in paths {
             if path.exists() {
                 let size = Self::calculate_directory_size(&path)?;
+
+                // Detect zero-installs: if this is <project>/.yarn/cache, check the project root
+                let is_zero_installs =
+                    if path.ends_with(".yarn/cache") || path.ends_with(".yarn\\cache") {
+                        path.parent() // .yarn
+                            .and_then(|p| p.parent()) // project root
+                            .map(Self::is_zero_installs)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                let (can_delete, description) = if is_zero_installs {
+                    (
+                        false,
+                        format!(
+                            "Yarn zero-installs cache (committed to git — DO NOT DELETE): {}",
+                            path.display()
+                        ),
+                    )
+                } else {
+                    (
+                        true,
+                        format!(
+                            "Yarn cache: {}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ),
+                    )
+                };
+
                 cache_info.push(CacheInfo {
                     path: path.clone(),
                     size_bytes: size,
-                    description: format!(
-                        "Yarn cache: {}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ),
-                    can_delete: true,
+                    description,
+                    can_delete,
                 });
             }
         }
 
         Ok(cache_info)
+    }
+
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'yarn cache clean' periodically. For Berry, prefer 'nodeLinker: pnp' to avoid large node_modules."
     }
 
     async fn calculate_cache_size(&self) -> Result<u64> {
@@ -250,8 +291,36 @@ impl PackageManager for YarnManager {
 
         Ok(total_size)
     }
+}
 
-    async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
+impl YarnManager {
+    /// Returns `true` if `project_dir` appears to be a Yarn Berry zero-installs project.
+    ///
+    /// A zero-installs project commits `.yarn/cache` to git — i.e. its `.gitignore` does NOT
+    /// exclude `.yarn/cache`.  Deleting that directory would break the project for all
+    /// team members who rely on the committed packages.
+    pub fn is_zero_installs(project_dir: &std::path::Path) -> bool {
+        let gitignore = project_dir.join(".gitignore");
+        if !gitignore.exists() {
+            // No .gitignore → assume zero-installs to be safe
+            return project_dir.join(".yarn").join("cache").exists();
+        }
+        if let Ok(content) = std::fs::read_to_string(&gitignore) {
+            // If .gitignore contains an entry that ignores .yarn/cache then it is NOT zero-installs
+            let ignores_cache = content.lines().any(|line| {
+                let line = line.trim();
+                line == ".yarn/cache" || line == ".yarn/cache/" || line == "**/.yarn/cache"
+            });
+            if ignores_cache {
+                return false;
+            }
+            // .yarn/cache exists but not listed in .gitignore → zero-installs
+            return project_dir.join(".yarn").join("cache").exists();
+        }
+        false
+    }
+
+    pub async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!(
             "Starting Yarn cache cleanup (dry_run: {}, version: {})",
             dry_run,
@@ -360,7 +429,7 @@ impl PackageManager for YarnManager {
         })
     }
 
-    async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
+    pub async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!(
             "Starting Yarn global packages cleanup (dry_run: {})",
             dry_run

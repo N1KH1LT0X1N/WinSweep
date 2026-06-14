@@ -1,6 +1,5 @@
 # Rust
 /target/
-Cargo.lock
 
 # IDE
 .vscode/
@@ -14,6 +13,12 @@ Thumbs.db
 
 # Logs
 *.log
+winsweep.log
+audit.log
+
+# Environment
+.env
+*.env
 
 # Build artifacts
 dist/
@@ -36,5 +41,3 @@ dist/
 *.bak
 *.backup
 
-# Build artifacts (excluding build.ps1 which is needed)
-dist/

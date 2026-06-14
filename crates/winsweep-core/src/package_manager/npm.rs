@@ -4,7 +4,8 @@ use super::{
     calculate_directory_size, format_bytes, safe_delete_directory, CacheInfo, PackageCleanResult,
     PackageManager,
 };
-use anyhow::{Context, Result};
+use anyhow::Context;
+use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -12,6 +13,7 @@ use tracing::{debug, info, warn};
 use which::which;
 
 /// npm package manager
+#[derive(Default)]
 pub struct NpmManager {
     npm_path: Option<PathBuf>,
     cache_path: Option<PathBuf>,
@@ -41,8 +43,8 @@ impl NpmManager {
 
             match output {
                 Ok(result) if result.status.success() => {
-                    let path_str = String::from_utf8_lossy(&result.stdout).trim();
-                    let path = PathBuf::from(path_str);
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let path = PathBuf::from(stdout.trim());
                     return Ok(path);
                 }
                 _ => {
@@ -77,8 +79,8 @@ impl NpmManager {
 
             match output {
                 Ok(result) if result.status.success() => {
-                    let path_str = String::from_utf8_lossy(&result.stdout).trim();
-                    let path = PathBuf::from(path_str);
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let path = PathBuf::from(stdout.trim());
                     return Ok(path.join("node_modules"));
                 }
                 _ => {}
@@ -334,13 +336,8 @@ impl PackageManager for NpmManager {
 
         Ok(cache_info)
     }
-}
 
-impl Default for NpmManager {
-    fn default() -> Self {
-        Self {
-            npm_path: None,
-            cache_path: None,
-        }
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'npm config set cache-max 86400000' to limit cache TTL. Periodically run 'npm cache clean --force'."
     }
 }

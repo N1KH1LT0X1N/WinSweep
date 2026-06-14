@@ -3,12 +3,14 @@
 //! This crate contains shared types, constants, and utilities used across all WinSweep components.
 
 pub mod config;
+pub mod i18n;
 pub mod never_delete;
 pub mod project_signatures;
 pub mod types;
 
 // Re-export commonly used types
 pub use config::Config;
+pub use i18n::{set_locale, translate, TranslationSet};
 pub use never_delete::NEVER_DELETE_PATHS;
 pub use project_signatures::ProjectSignature;
 pub use types::ProjectType;

@@ -3,31 +3,32 @@
 //! This module provides functionality to distinguish between NTFS junctions
 //! and symbolic links on Windows systems.
 
-use crate::windows_api::WindowsApi;
-use anyhow::{Context, Result};
+use anyhow::Result;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tracing::{debug, warn};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-    IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES,
+    OPEN_EXISTING,
 };
-use windows::Win32::System::Ioctl::{
-    DeviceIoControl, FSCTL_GET_REPARSE_POINT, REPARSE_DATA_BUFFER,
-};
+use windows::Win32::System::Ioctl::FSCTL_GET_REPARSE_POINT;
+use windows::Win32::System::SystemServices::{IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK};
+use windows::Win32::System::IO::DeviceIoControl;
 
 /// Detector for distinguishing between junctions and symlinks
-pub struct JunctionDetector {
-    windows_api: Arc<WindowsApi>,
+pub struct JunctionDetector;
+
+impl Default for JunctionDetector {
+    fn default() -> Self {
+        Self
+    }
 }
 
 impl JunctionDetector {
     /// Create a new junction detector
-    pub fn new(windows_api: Arc<WindowsApi>) -> Self {
-        Self { windows_api }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Check if a path is a reparse point (junction or symlink)
@@ -36,7 +37,7 @@ impl JunctionDetector {
 
         unsafe {
             let attributes = GetFileAttributesW(PCWSTR(path_wide.as_ptr()));
-            if attributes == INVALID_HANDLE_VALUE {
+            if attributes == INVALID_FILE_ATTRIBUTES {
                 return Ok(false);
             }
 
@@ -72,7 +73,7 @@ impl JunctionDetector {
             // Open the file with reparse point flag
             let handle = CreateFileW(
                 PCWSTR(path_wide.as_ptr()),
-                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 Some(std::ptr::null()),
                 OPEN_EXISTING,
@@ -91,22 +92,20 @@ impl JunctionDetector {
             let result = DeviceIoControl(
                 handle,
                 FSCTL_GET_REPARSE_POINT,
-                Some(std::ptr::null()),
+                None,
                 0,
                 Some(buffer.as_mut_ptr() as *mut _),
                 buffer.len() as u32,
                 Some(&mut bytes_returned),
-                Some(std::ptr::null()),
+                None,
             );
-
-            drop(handle);
 
             if result.is_err() {
                 return Err(anyhow::anyhow!("Failed to get reparse point data"));
             }
 
             // Parse the reparse data buffer
-            let reparse_data = &buffer as *const _ as *const REPARSE_DATA_BUFFER;
+            let reparse_data = &buffer as *const _ as *const ReparseDataBuffer;
             let reparse_tag = (*reparse_data).ReparseTag;
 
             Ok(reparse_tag)
@@ -125,7 +124,7 @@ impl JunctionDetector {
             // Open the file with reparse point flag
             let handle = CreateFileW(
                 PCWSTR(path_wide.as_ptr()),
-                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+                windows::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 Some(std::ptr::null()),
                 OPEN_EXISTING,
@@ -144,22 +143,20 @@ impl JunctionDetector {
             let result = DeviceIoControl(
                 handle,
                 FSCTL_GET_REPARSE_POINT,
-                Some(std::ptr::null()),
+                None,
                 0,
                 Some(buffer.as_mut_ptr() as *mut _),
                 buffer.len() as u32,
                 Some(&mut bytes_returned),
-                Some(std::ptr::null()),
+                None,
             );
-
-            drop(handle);
 
             if result.is_err() {
                 return Err(anyhow::anyhow!("Failed to get reparse point data"));
             }
 
             // Parse the reparse data based on type
-            let reparse_data = &buffer as *const _ as *const REPARSE_DATA_BUFFER;
+            let reparse_data = &buffer as *const _ as *const ReparseDataBuffer;
             let reparse_tag = (*reparse_data).ReparseTag;
 
             match reparse_tag {
@@ -167,47 +164,35 @@ impl JunctionDetector {
                     // Junction point
                     let mount_point_data =
                         &*(&buffer as *const _ as *const MountPointReparseBuffer);
-                    let path_offset = mount_point_data.PathBufferOffset as usize;
-                    let path_length = mount_point_data.PathBufferLength as usize;
+                    let path_offset = mount_point_data.SubstituteNameOffset as usize;
+                    let path_length = mount_point_data.SubstituteNameLength as usize;
 
-                    let path_bytes =
-                        &mount_point_data.PathBuffer[path_offset..path_offset + path_length];
                     let path_wide = std::slice::from_raw_parts(
-                        path_bytes.as_ptr() as *const u16,
+                        mount_point_data.PathBuffer.as_ptr().add(path_offset) as *const u16,
                         path_length / 2,
                     );
 
                     // Remove the "\??\" prefix
                     let path_str = String::from_utf16_lossy(path_wide);
-                    let trimmed = if path_str.starts_with(r"\??\") {
-                        &path_str[4..]
-                    } else {
-                        &path_str
-                    };
+                    let trimmed = path_str.strip_prefix(r"\??\").unwrap_or(&path_str);
 
                     Ok(PathBuf::from(trimmed))
                 }
                 IO_REPARSE_TAG_SYMLINK => {
                     // Symbolic link
                     let symlink_data = &*(&buffer as *const _ as *const SymbolicLinkReparseBuffer);
-                    let path_offset = symlink_data.PathBufferOffset as usize;
-                    let path_length = symlink_data.PathBufferLength as usize;
+                    let path_offset = symlink_data.SubstituteNameOffset as usize;
+                    let path_length = symlink_data.SubstituteNameLength as usize;
 
-                    let path_bytes =
-                        &symlink_data.PathBuffer[path_offset..path_offset + path_length];
                     let path_wide = std::slice::from_raw_parts(
-                        path_bytes.as_ptr() as *const u16,
+                        symlink_data.PathBuffer.as_ptr().add(path_offset) as *const u16,
                         path_length / 2,
                     );
 
                     let path_str = String::from_utf16_lossy(path_wide);
 
                     // Remove the "\??\" prefix if present
-                    let trimmed = if path_str.starts_with(r"\??\") {
-                        &path_str[4..]
-                    } else {
-                        &path_str
-                    };
+                    let trimmed = path_str.strip_prefix(r"\??\").unwrap_or(&path_str);
 
                     Ok(PathBuf::from(trimmed))
                 }
@@ -254,8 +239,17 @@ fn to_wide(path: &Path) -> Vec<u16> {
         .collect()
 }
 
-// Reparse data buffer structures (simplified)
+// Reparse data buffer structures (simplified, mirroring Windows API layout)
 #[repr(C)]
+#[allow(non_snake_case)]
+struct ReparseDataBuffer {
+    ReparseTag: u32,
+    ReparseDataLength: u16,
+    Reserved: u16,
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
 struct MountPointReparseBuffer {
     SubstituteNameOffset: u16,
     SubstituteNameLength: u16,
@@ -265,6 +259,7 @@ struct MountPointReparseBuffer {
 }
 
 #[repr(C)]
+#[allow(non_snake_case)]
 struct SymbolicLinkReparseBuffer {
     SubstituteNameOffset: u16,
     SubstituteNameLength: u16,
@@ -277,13 +272,14 @@ struct SymbolicLinkReparseBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::windows_api::WindowsApi;
     use std::sync::Arc;
     use tempfile::TempDir;
 
     #[test]
     fn test_is_reparse_point() {
-        let windows_api = Arc::new(WindowsApi::new().unwrap());
-        let detector = JunctionDetector::new(windows_api);
+        let _windows_api = Arc::new(WindowsApi::new().unwrap());
+        let detector = JunctionDetector::new();
         let temp_dir = TempDir::new().unwrap();
 
         // Regular directory should not be a reparse point
@@ -292,8 +288,8 @@ mod tests {
 
     #[test]
     fn test_regular_file() {
-        let windows_api = Arc::new(WindowsApi::new().unwrap());
-        let detector = JunctionDetector::new(windows_api);
+        let _windows_api = Arc::new(WindowsApi::new().unwrap());
+        let detector = JunctionDetector::new();
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.txt");
         std::fs::write(&file_path, "test").unwrap();

@@ -7,18 +7,16 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
+    prelude::Stylize,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{
-        Block, Borders, Clear, Gauge, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap,
-    },
+    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs, Wrap},
     Frame, Terminal,
 };
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use winsweep_common::Config;
 use winsweep_core::{
     ContainerInfo, DockerClient, HomeEditionCompat, ImageInfo, NetworkInfo, PackageManagerRegistry,
@@ -67,9 +65,12 @@ pub struct App {
     pub runtime: tokio::runtime::Runtime,
     /// Configuration
     pub config: Config,
+    /// Dry run mode (don't actually delete)
+    pub dry_run: bool,
     /// UI state
     pub ui_state: UiState,
-    /// Event receiver
+    /// Event receiver (async plumbing, reserved for future use)
+    #[allow(dead_code)]
     pub event_rx: Option<mpsc::UnboundedReceiver<Event>>,
     /// Background task sender
     pub task_tx: Option<mpsc::UnboundedSender<TaskMessage>>,
@@ -99,7 +100,7 @@ pub struct UiState {
     /// Scan page state
     pub scan: ScanState,
     /// WSL page state
-    pub wsl: WslState,
+    pub wsl: WslPageState,
     /// Docker page state
     pub docker: DockerState,
     /// Windows Update page state
@@ -120,17 +121,15 @@ pub struct UiState {
 #[derive(Default)]
 pub struct ScanState {
     pub paths: Vec<String>,
-    pub selected_path: usize,
-    pub include_hidden: bool,
-    pub follow_symlinks: bool,
-    pub parallel_jobs: usize,
     pub scanning: bool,
     pub scan_results: Vec<String>,
+    /// Only report artifact dirs whose lock-file is older than this many days (`--older N`)
+    pub min_age_days: Option<u32>,
 }
 
 /// WSL page state
 #[derive(Default)]
-pub struct WslState {
+pub struct WslPageState {
     pub distributions: Vec<String>,
     pub selected_dist: usize,
     pub compacting: bool,
@@ -196,7 +195,6 @@ pub struct PackageManagerInfo {
 #[derive(Default)]
 pub struct ConfigState {
     pub editing: bool,
-    pub config_values: HashMap<String, String>,
     pub selected_key: usize,
 }
 
@@ -223,8 +221,9 @@ pub struct ServiceInfo {
     pub can_stop: bool,
 }
 
-/// Background task messages
+/// Background task messages (protocol for async tasks; not all variants wired yet)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum TaskMessage {
     ScanProgress { current: u64, total: u64 },
     ScanComplete { items_found: u64 },
@@ -249,11 +248,15 @@ impl App {
             docker_client: None,
             runtime: tokio::runtime::Runtime::new()?,
             config: Config::load().unwrap_or_default(),
+            dry_run: false,
             ui_state: UiState::default(),
             event_rx: None,
             task_tx: None,
             last_update: Instant::now(),
         };
+
+        // Initialize locale from config
+        winsweep_common::set_locale(&app.config.ui.language);
 
         // Initialize UI state
         app.ui_state.main_menu.select(Some(0));
@@ -321,7 +324,7 @@ impl App {
             }
 
             // Check for background task messages
-            if let Some(ref tx) = self.task_tx {
+            if self.task_tx.is_some() {
                 // In a real implementation, we'd have a receiver here
                 // For now, we'll just update the time
                 self.last_update = Instant::now();
@@ -524,6 +527,10 @@ impl App {
                 // Refresh Docker resources
                 self.refresh_docker_resources();
             }
+            KeyCode::Char('p') => {
+                // Prune / cleanup Docker resources
+                self.cleanup_docker();
+            }
             _ => {}
         }
     }
@@ -722,7 +729,7 @@ impl App {
         self.ui_state.package_managers.managers.clear();
 
         // Create registry and detect package managers
-        let registry = PackageManagerRegistry::new();
+        let registry = self.runtime.block_on(PackageManagerRegistry::new());
 
         // Add all package managers with their status
         for manager in registry.get_managers() {
@@ -1006,14 +1013,13 @@ impl App {
 
                     for image in images {
                         // Only remove dangling images by default
-                        if image.dangling {
-                            if self
+                        if image.dangling
+                            && self
                                 .runtime
                                 .block_on(client.remove_image(&image.id, true))
                                 .is_ok()
-                            {
-                                removed += 1;
-                            }
+                        {
+                            removed += 1;
                         }
                     }
 
@@ -1084,7 +1090,7 @@ impl App {
     }
 
     /// Draw the UI
-    pub fn draw(&mut self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>) {
+    pub fn draw(&mut self, f: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1115,7 +1121,7 @@ impl App {
     }
 
     /// Draw the header
-    fn draw_header(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_header(&self, f: &mut Frame, area: Rect) {
         let header_text = vec![Line::from(vec![
             Span::styled(
                 "WinSweep",
@@ -1137,7 +1143,7 @@ impl App {
     }
 
     /// Draw the main menu
-    fn draw_main_menu(&mut self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_main_menu(&mut self, f: &mut Frame, area: Rect) {
         let items = vec![
             ListItem::new("🔍 Scan System"),
             ListItem::new("🐧 WSL Management"),
@@ -1161,7 +1167,7 @@ impl App {
     }
 
     /// Draw the footer with progress information
-    fn draw_footer(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_footer(&self, f: &mut Frame, area: Rect) {
         if self.ui_state.progress.active {
             let gauge = Gauge::default()
                 .block(Block::default().borders(Borders::ALL))
@@ -1201,15 +1207,76 @@ impl App {
         }
     }
 
-    /// Placeholder for other draw methods
-    fn draw_scan_page(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
-        let text = Text::from("Scan page - Under construction");
-        let paragraph =
-            Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("System Scan"));
-        f.render_widget(paragraph, area);
+    fn draw_scan_page(&self, f: &mut Frame, area: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Min(0),    // Content
+                Constraint::Length(3), // Status
+            ])
+            .split(area);
+
+        // Title
+        let title = Paragraph::new("System Scan")
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(Color::Cyan));
+        f.render_widget(title, chunks[0]);
+
+        // Content
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(chunks[1]);
+
+        // Left - Paths
+        let mut path_items = vec![ListItem::new(Line::from(vec![Span::styled(
+            "Paths to scan",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Yellow),
+        )]))];
+        if self.ui_state.scan.paths.is_empty() {
+            path_items.push(ListItem::new("  (current directory)"));
+        } else {
+            for p in &self.ui_state.scan.paths {
+                path_items.push(ListItem::new(format!("  {}", p)));
+            }
+        }
+        let path_list =
+            List::new(path_items).block(Block::default().borders(Borders::ALL).title("Targets"));
+        f.render_widget(path_list, content_chunks[0]);
+
+        // Right - Results
+        let mut result_lines: Vec<Line> = Vec::new();
+        if self.ui_state.scan.scanning {
+            result_lines.push(Line::from(vec![Span::styled(
+                "Scanning...",
+                Style::default().fg(Color::Yellow),
+            )]));
+        } else if self.ui_state.scan.scan_results.is_empty() {
+            result_lines.push(Line::from("No results yet. Press [s] to start a scan."));
+        } else {
+            for r in &self.ui_state.scan.scan_results {
+                result_lines.push(Line::from(r.as_str()));
+            }
+        }
+        let results = Paragraph::new(Text::from(result_lines))
+            .block(Block::default().borders(Borders::ALL).title("Results"))
+            .wrap(Wrap { trim: true });
+        f.render_widget(results, content_chunks[1]);
+
+        // Status bar
+        let status_text = if self.ui_state.scan.scanning {
+            "Scanning in progress..."
+        } else {
+            "Actions: [s] Start scan, [Esc] Back"
+        };
+        let status = Paragraph::new(status_text).block(Block::default().borders(Borders::ALL));
+        f.render_widget(status, chunks[2]);
     }
 
-    fn draw_wsl_page(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_wsl_page(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1261,7 +1328,7 @@ impl App {
                                 }
                             )
                         })
-                        .unwrap_or("")
+                        .unwrap_or_default()
                 } else {
                     String::new()
                 };
@@ -1403,7 +1470,7 @@ impl App {
         }
     }
 
-    fn draw_docker_page(&mut self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_docker_page(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1430,7 +1497,7 @@ impl App {
 
         // Tabs
         let titles = ["Containers", "Images", "Volumes", "Networks"];
-        let tabs = Tabs::new(titles.iter().map(|t| *t).collect::<Vec<_>>())
+        let tabs = Tabs::new(titles.to_vec())
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default())
             .highlight_style(Style::default().fg(Color::Yellow))
@@ -1472,11 +1539,8 @@ impl App {
                         };
 
                         let text = format!(
-                            "{} - {} ({}){}",
-                            container.name,
-                            container.image,
-                            format!("{:?}", container.status),
-                            size_text
+                            "{} - {} ({:?}){}",
+                            container.name, container.image, container.status, size_text
                         );
 
                         items.push(ListItem::new(text).style(style).fg(status_color));
@@ -1589,20 +1653,16 @@ impl App {
                 format_bytes(self.ui_state.docker.space_freed)
             )
         } else if !self.ui_state.docker.status_message.is_empty() {
-            &self.ui_state.docker.status_message
+            self.ui_state.docker.status_message.clone()
         } else {
-            "Actions: [Tab] Switch tabs, [d] Delete selected, [D] Delete all, [r] Refresh, [Esc] Back"
+            "Actions: [Tab] Switch tabs, [d] Delete selected, [D] Delete all, [r] Refresh, [Esc] Back".to_string()
         };
 
         let status = Paragraph::new(status_text).block(Block::default().borders(Borders::ALL));
         f.render_widget(status, chunks[2]);
     }
 
-    fn draw_windows_update_page(
-        &self,
-        f: &mut Frame<CrosstermBackend<std::io::Stdout>>,
-        area: Rect,
-    ) {
+    fn draw_windows_update_page(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1619,18 +1679,17 @@ impl App {
         f.render_widget(title, chunks[0]);
 
         // Content
-        let mut info_text = Vec::new();
-        info_text.push(Line::from("This will clean up Windows Update cache files:"));
-        info_text.push(Line::from(""));
-        info_text.push(Line::from("• Downloaded update files"));
-        info_text.push(Line::from("• Temporary installation files"));
-        info_text.push(Line::from("• Old update backups"));
-        info_text.push(Line::from(""));
-        info_text.push(Line::from("WARNING: This action is irreversible!"));
-        info_text.push(Line::from(
-            "You may not be able to uninstall updates after cleanup.",
-        ));
-        info_text.push(Line::from(""));
+        let mut info_text = vec![
+            Line::from("This will clean up Windows Update cache files:"),
+            Line::from(""),
+            Line::from("• Downloaded update files"),
+            Line::from("• Temporary installation files"),
+            Line::from("• Old update backups"),
+            Line::from(""),
+            Line::from("WARNING: This action is irreversible!"),
+            Line::from("You may not be able to uninstall updates after cleanup."),
+            Line::from(""),
+        ];
 
         if self.ui_state.windows_update.cleaning {
             info_text.push(Line::from("Cleaning in progress..."));
@@ -1676,7 +1735,7 @@ impl App {
         }
     }
 
-    fn draw_services_page(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_services_page(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1741,7 +1800,7 @@ impl App {
 
         // Status bar
         let status_text = if self.ui_state.services.managing {
-            "Managing service..."
+            "Managing service...".to_string()
         } else if let Some(service) = self
             .ui_state
             .services
@@ -1757,18 +1816,14 @@ impl App {
                 }
             )
         } else {
-            "Use arrow keys to navigate, [Esc] to go back"
+            "Use arrow keys to navigate, [Esc] to go back".to_string()
         };
 
         let status = Paragraph::new(status_text).block(Block::default().borders(Borders::ALL));
         f.render_widget(status, chunks[2]);
     }
 
-    fn draw_package_managers_page(
-        &mut self,
-        f: &mut Frame<CrosstermBackend<std::io::Stdout>>,
-        area: Rect,
-    ) {
+    fn draw_package_managers_page(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1936,7 +1991,7 @@ impl App {
         f.render_widget(status, chunks[2]);
     }
 
-    fn draw_config_page(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_config_page(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1966,7 +2021,7 @@ impl App {
         items.push(ListItem::new(Line::from(vec![
             Span::styled("  Parallel Jobs: ", Style::default().fg(Color::Gray)),
             Span::styled(
-                self.config.scan.parallel_jobs.to_string(),
+                self.config.scan.parallel_jobs.unwrap_or(0).to_string(),
                 Style::default().fg(Color::White),
             ),
         ])));
@@ -2068,7 +2123,7 @@ impl App {
         f.render_widget(status, chunks[2]);
     }
 
-    fn draw_about_page(&self, f: &mut Frame<CrosstermBackend<std::io::Stdout>>, area: Rect) {
+    fn draw_about_page(&self, f: &mut Frame, area: Rect) {
         let text = Text::from(vec![
             Line::from("WinSweep - Windows Disk Cleaning Tool"),
             Line::from(""),

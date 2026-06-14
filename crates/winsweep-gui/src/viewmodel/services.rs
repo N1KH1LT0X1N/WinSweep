@@ -1,7 +1,10 @@
 //! Services view model
 
 use serde::{Deserialize, Serialize};
-use winsweep_core::{ServiceManager, ServiceStatus};
+use winsweep_core::service_manager::{
+    ServiceInfo as CoreServiceInfo, ServiceStartType as CoreServiceStartType,
+};
+use winsweep_core::{ServiceManager, ServiceState, ServiceStatus};
 
 /// Services view model
 #[derive(Serialize, Deserialize)]
@@ -19,7 +22,7 @@ pub struct ServicesViewModel {
 }
 
 /// Service information
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ServiceInfo {
     pub name: String,
     pub display_name: String,
@@ -31,7 +34,7 @@ pub struct ServiceInfo {
 }
 
 /// Service start type
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServiceStartType {
     Automatic,
     Manual,
@@ -54,80 +57,29 @@ impl ServicesViewModel {
 
     /// Update the services view model
     pub fn update(&mut self) {
-        // TODO: Update service status
+        // Service status is refreshed on demand via refresh_services
     }
 
-    /// Refresh services
+    /// Refresh services from the ServiceManager
     pub fn refresh_services(
         &mut self,
         service_manager: &ServiceManager,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.services.clear();
 
-        // TODO: Get services from ServiceManager
+        let core_services = service_manager
+            .get_all_services()
+            .map_err(|e| format!("Failed to enumerate services: {}", e))?;
 
-        self.status_message = Some("Services refreshed".to_string());
+        for core in core_services {
+            self.services.push(map_core_service(&core));
+        }
+
+        self.status_message = Some(format!(
+            "Services refreshed ({} services)",
+            self.services.len()
+        ));
         Ok(())
-    }
-
-    /// Start selected service
-    pub fn start_selected(
-        &mut self,
-        service_manager: &ServiceManager,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(index) = self.selected_service {
-            if index < self.services.len() {
-                let service_name = &self.services[index].name;
-                self.status_message = Some(format!("Starting {}...", service_name));
-
-                // TODO: Start service
-
-                self.status_message = Some(format!("{} started", service_name));
-                return Ok(());
-            }
-        }
-
-        Err("No service selected".into())
-    }
-
-    /// Stop selected service
-    pub fn stop_selected(
-        &mut self,
-        service_manager: &ServiceManager,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(index) = self.selected_service {
-            if index < self.services.len() {
-                let service_name = &self.services[index].name;
-                self.status_message = Some(format!("Stopping {}...", service_name));
-
-                // TODO: Stop service
-
-                self.status_message = Some(format!("{} stopped", service_name));
-                return Ok(());
-            }
-        }
-
-        Err("No service selected".into())
-    }
-
-    /// Restart selected service
-    pub fn restart_selected(
-        &mut self,
-        service_manager: &ServiceManager,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(index) = self.selected_service {
-            if index < self.services.len() {
-                let service_name = &self.services[index].name;
-                self.status_message = Some(format!("Restarting {}...", service_name));
-
-                // TODO: Restart service
-
-                self.status_message = Some(format!("{} restarted", service_name));
-                return Ok(());
-            }
-        }
-
-        Err("No service selected".into())
     }
 
     /// Get filtered services
@@ -143,11 +95,34 @@ impl ServicesViewModel {
                         .to_lowercase()
                         .contains(&self.filter_text.to_lowercase());
 
-                let matches_status =
-                    !self.show_running_only || matches!(s.status, ServiceStatus::Running);
+                let matches_status = !self.show_running_only
+                    || matches!(s.status.current_state, ServiceState::Running);
 
                 matches_filter && matches_status
             })
             .collect()
+    }
+}
+
+fn map_core_service(core: &CoreServiceInfo) -> ServiceInfo {
+    ServiceInfo {
+        name: core.name.clone(),
+        display_name: core.display_name.clone(),
+        status: core.status.clone(),
+        start_type: map_core_start_type(core.start_type),
+        description: String::new(),
+        can_stop: core.can_stop,
+        can_start: core.can_start,
+    }
+}
+
+fn map_core_start_type(core: CoreServiceStartType) -> ServiceStartType {
+    match core {
+        CoreServiceStartType::Automatic => ServiceStartType::Automatic,
+        CoreServiceStartType::Manual => ServiceStartType::Manual,
+        CoreServiceStartType::Disabled => ServiceStartType::Disabled,
+        CoreServiceStartType::Boot => ServiceStartType::Boot,
+        CoreServiceStartType::System => ServiceStartType::System,
+        CoreServiceStartType::Unknown => ServiceStartType::Manual,
     }
 }

@@ -4,12 +4,12 @@
 //! for Windows Home edition compatibility.
 
 use crate::windows_api::WindowsApi;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// WSL version types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,27 +105,21 @@ impl WslDetector {
         }
 
         // Method 2: Check registry for WSL feature
-        if !self.has_wsl {
-            if self.check_registry_wsl_feature()? {
-                self.has_wsl = true;
-                debug!("WSL detected via registry feature");
-            }
+        if !self.has_wsl && self.check_registry_wsl_feature()? {
+            self.has_wsl = true;
+            debug!("WSL detected via registry feature");
         }
 
         // Method 3: Check for Lxss registry key
-        if !self.has_wsl {
-            if self.check_registry_lxss()? {
-                self.has_wsl = true;
-                debug!("WSL detected via Lxss registry key");
-            }
+        if !self.has_wsl && self.check_registry_lxss()? {
+            self.has_wsl = true;
+            debug!("WSL detected via Lxss registry key");
         }
 
         // Method 4: Check for WSL-related files
-        if !self.has_wsl {
-            if self.check_wsl_files()? {
-                self.has_wsl = true;
-                debug!("WSL detected via file system");
-            }
+        if !self.has_wsl && self.check_wsl_files()? {
+            self.has_wsl = true;
+            debug!("WSL detected via file system");
         }
 
         if self.has_wsl {
@@ -319,7 +313,7 @@ impl WslDetector {
     /// Detect distributions from registry
     fn detect_distributions_from_registry(&mut self) -> Result<()> {
         // Get default distribution
-        let default_distro = self
+        let _default_distro = self
             .windows_api
             .read_registry_string(
                 r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss",
@@ -514,7 +508,7 @@ impl WslDetector {
     pub fn has_vhdx(&self, distribution: &str) -> bool {
         if let Some(distro) = self.distributions.get(distribution) {
             distro.version == WslVersion::Wsl2
-                && distro.vhdx_path.as_ref().map_or(false, |p| p.exists())
+                && distro.vhdx_path.as_ref().is_some_and(|p| p.exists())
         } else {
             false
         }

@@ -13,6 +13,7 @@ pub mod restart_manager;
 pub mod scanner;
 pub mod service_manager;
 pub mod tool_detector;
+pub mod updater;
 pub mod windows_api;
 pub mod windows_edition;
 pub mod wsl_detector;
@@ -30,7 +31,7 @@ pub use junction_detector::JunctionDetector;
 pub use package_manager::{CacheInfo, PackageCleanResult, PackageManager, PackageManagerRegistry};
 pub use restart_manager::{RestartManager, RestartSession};
 pub use scanner::{Scanner, ScannerHandle};
-pub use service_manager::{ServiceManager, ServiceStatus};
+pub use service_manager::{ServiceManager, ServiceState, ServiceStatus};
 pub use tool_detector::{ToolDetector, ToolInfo};
 pub use windows_api::WindowsApi;
 pub use windows_edition::{

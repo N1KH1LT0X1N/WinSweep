@@ -4,7 +4,8 @@ use super::{
     calculate_directory_size, format_bytes, safe_delete_directory, CacheInfo, PackageCleanResult,
     PackageManager,
 };
-use anyhow::{Context, Result};
+use anyhow::Context;
+use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -12,14 +13,13 @@ use tracing::{debug, info, warn};
 use which::which;
 
 /// NuGet package manager
-pub struct NugetManager {
-    nuget_path: Option<PathBuf>,
-}
+#[derive(Default)]
+pub struct NugetManager;
 
 impl NugetManager {
     /// Create a new NuGet manager
     pub async fn new() -> Result<Self> {
-        Ok(Self { nuget_path: None })
+        Ok(Self)
     }
 
     /// Get NuGet cache paths
@@ -91,22 +91,21 @@ impl NugetManager {
                 }
 
                 // Check for .csproj files
-                for entry in
-                    std::fs::read_dir(&dir).unwrap_or_else(|_| std::fs::read_dir(".").unwrap())
+                for entry in std::fs::read_dir(&dir)
+                    .unwrap_or_else(|_| std::fs::read_dir(".").unwrap())
+                    .flatten()
                 {
-                    if let Ok(entry) = entry {
-                        let path = entry.path();
-                        if path.is_file() {
-                            if let Some(filename) = path.file_name() {
-                                if let Some(name) = filename.to_str() {
-                                    if name.ends_with(".csproj")
-                                        || name.ends_with(".fsproj")
-                                        || name.ends_with(".vbproj")
-                                    {
-                                        // Found a project file
-                                        debug!("Found project file: {}", path.display());
-                                        break;
-                                    }
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(filename) = path.file_name() {
+                            if let Some(name) = filename.to_str() {
+                                if name.ends_with(".csproj")
+                                    || name.ends_with(".fsproj")
+                                    || name.ends_with(".vbproj")
+                                {
+                                    // Found a project file
+                                    debug!("Found project file: {}", path.display());
+                                    break;
                                 }
                             }
                         }
@@ -384,10 +383,8 @@ impl PackageManager for NugetManager {
 
         Ok(cache_info)
     }
-}
 
-impl Default for NugetManager {
-    fn default() -> Self {
-        Self { nuget_path: None }
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'dotnet nuget locals all --clear' periodically. Set globalPackagesFolder to a shared path in NuGet.config."
     }
 }

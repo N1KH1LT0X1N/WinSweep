@@ -1,0 +1,110 @@
+name: WinSweep Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-gnu
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Run tests
+      run: cargo test --all-features --workspace
+
+    - name: Build release binaries
+      run: |
+        cargo build --release -p winsweep-cli --target x86_64-pc-windows-gnu
+        cargo build --release -p winsweep-gui --target x86_64-pc-windows-gnu --features system-tray
+
+    - name: Package binaries
+      run: |
+        $version = "${{ github.ref_name }}".TrimStart('v')
+        $targetDir = "target\x86_64-pc-windows-gnu\release"
+        $distDir = "dist\winsweep-$version"
+        New-Item -ItemType Directory -Path $distDir -Force
+
+        Copy-Item "$targetDir\winsweep-cli.exe" $distDir\
+        Copy-Item "$targetDir\winsweep-gui.exe" $distDir\
+        Copy-Item README.md $distDir\
+        Copy-Item LICENSE $distDir\
+
+        # Plain ZIP
+        Compress-Archive -Path $distDir\* -DestinationPath "winsweep-$version-windows-x64.zip"
+
+        # SHA256 for ZIP
+        Get-FileHash -Path "winsweep-$version-windows-x64.zip" -Algorithm SHA256 | Out-File "winsweep-$version-windows-x64.zip.sha256"
+      shell: powershell
+
+    - name: Install NSIS
+      run: choco install nsis -y
+
+    - name: Build installer
+      run: |
+        $version = "${{ github.ref_name }}".TrimStart('v')
+        makensis /DPRODUCT_VERSION=$version installer\winsweep.nsi
+      shell: powershell
+
+    - name: Rename installer
+      run: |
+        $version = "${{ github.ref_name }}".TrimStart('v')
+        Rename-Item "winsweep-$version-setup.exe" "winsweep-$version-setup.exe" -ErrorAction SilentlyContinue
+        # The NSIS output name already contains the version from the /D define,
+        # so we just need to ensure it exists with the correct name.
+        if (-not (Test-Path "winsweep-$version-setup.exe")) {
+            # Fallback: look for the default output name if /D didn't apply as expected
+            if (Test-Path "winsweep-0.1.0-setup.exe") {
+                Rename-Item "winsweep-0.1.0-setup.exe" "winsweep-$version-setup.exe"
+            }
+        }
+      shell: powershell
+
+    - name: SHA256 for installer
+      run: |
+        $version = "${{ github.ref_name }}".TrimStart('v')
+        Get-FileHash -Path "winsweep-$version-setup.exe" -Algorithm SHA256 | Out-File "winsweep-$version-setup.exe.sha256"
+      shell: powershell
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          winsweep-*-windows-x64.zip
+          winsweep-*-windows-x64.zip.sha256
+          winsweep-*-setup.exe
+          winsweep-*-setup.exe.sha256
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: winsweep-release
+        path: |
+          winsweep-*-windows-x64.zip
+          winsweep-*-windows-x64.zip.sha256
+          winsweep-*-setup.exe
+          winsweep-*-setup.exe.sha256

@@ -18,6 +18,8 @@ pub struct Config {
     pub ui: UiConfig,
     /// Logging settings
     pub logging: LoggingConfig,
+    /// Telemetry settings
+    pub telemetry: TelemetryConfig,
     /// Scan include hidden files
     pub scan_include_hidden: bool,
     /// Scan include system files
@@ -103,6 +105,15 @@ pub struct LoggingConfig {
     pub verbose_logging: bool,
 }
 
+/// Telemetry configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TelemetryConfig {
+    /// Whether the user has opted in to crash reporting and telemetry
+    pub opt_in: bool,
+    /// DSN or endpoint for telemetry (empty = default)
+    pub endpoint: String,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -110,6 +121,7 @@ impl Default for Config {
             cleanup: CleanupConfig::default(),
             ui: UiConfig::default(),
             logging: LoggingConfig::default(),
+            telemetry: TelemetryConfig::default(),
             scan_include_hidden: false,
             scan_include_system: false,
             scan_min_size: 1024, // 1KB
@@ -312,5 +324,22 @@ mod tests {
         let mut config = Config::default();
         config.scan.paths.clear();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_telemetry_disabled_by_default() {
+        let config = Config::default();
+        assert!(!config.telemetry.opt_in);
+    }
+
+    #[test]
+    fn test_telemetry_opt_in_roundtrip() {
+        let mut config = Config::default();
+        config.telemetry.opt_in = true;
+        config.telemetry.endpoint = "https://example.com".to_string();
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.telemetry.opt_in);
+        assert_eq!(parsed.telemetry.endpoint, "https://example.com");
     }
 }

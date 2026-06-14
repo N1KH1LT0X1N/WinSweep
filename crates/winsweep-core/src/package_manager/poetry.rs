@@ -1,7 +1,9 @@
 //! Poetry package manager cache cleanup
 
-use crate::package_manager::{PackageCleanResult, PackageManager};
-use anyhow::{Context, Result};
+use crate::package_manager::{CacheInfo, PackageCleanResult, PackageManager};
+use anyhow::Context;
+use anyhow::Result;
+use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -69,12 +71,13 @@ impl PoetryManager {
     }
 }
 
+#[async_trait]
 impl PackageManager for PoetryManager {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "poetry"
     }
 
-    fn display_name(&self) -> &str {
+    fn display_name(&self) -> &'static str {
         "Poetry"
     }
 
@@ -204,6 +207,10 @@ impl PackageManager for PoetryManager {
         Ok(cache_info)
     }
 
+    fn prevention_tip(&self) -> &'static str {
+        "Use 'poetry cache clear pypi --all' after environment rebuilds. Pin versions in pyproject.toml to avoid redundant downloads."
+    }
+
     async fn calculate_cache_size(&self) -> Result<u64> {
         let paths = self.get_cache_paths().await?;
         let mut total_size = 0;
@@ -216,8 +223,10 @@ impl PackageManager for PoetryManager {
 
         Ok(total_size)
     }
+}
 
-    async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
+impl PoetryManager {
+    pub async fn clean_cache(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!("Starting Poetry cache cleanup (dry_run: {})", dry_run);
 
         let mut space_freed = 0;
@@ -226,7 +235,7 @@ impl PackageManager for PoetryManager {
         let start_time = std::time::Instant::now();
 
         // Use Poetry cache clear if available
-        if self.is_installed() {
+        if self.is_installed().await {
             debug!("Running 'poetry cache clear --all pypi'");
 
             if !dry_run {
@@ -294,7 +303,7 @@ impl PackageManager for PoetryManager {
         })
     }
 
-    async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
+    pub async fn clean_global_packages(&self, dry_run: bool) -> Result<PackageCleanResult> {
         info!(
             "Starting Poetry global packages cleanup (dry_run: {})",
             dry_run

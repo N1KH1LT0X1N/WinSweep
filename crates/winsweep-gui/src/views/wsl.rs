@@ -10,7 +10,7 @@ pub fn show_wsl(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
     // Refresh button
     ui.horizontal(|ui| {
         if ui.button("🔄 Refresh").clicked() {
-            if let Some(ref wsl_detector) = viewmodel.wsl_detector() {
+            if let Some(ref wsl_detector) = viewmodel.wsl_detector {
                 viewmodel.wsl.refresh_distributions(wsl_detector);
             }
         }
@@ -23,11 +23,28 @@ pub fn show_wsl(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
         ui.separator();
 
         // Distribution list
+        let distributions: Vec<_> = viewmodel
+            .wsl
+            .distributions
+            .iter()
+            .enumerate()
+            .map(|(i, dist)| {
+                (
+                    i,
+                    dist.name.clone(),
+                    dist.version,
+                    dist.state,
+                    dist.size_gb,
+                    dist.path.clone(),
+                    viewmodel.wsl.selected_distribution == Some(i),
+                )
+            })
+            .collect();
+
         egui::ScrollArea::vertical()
             .max_height(300.0)
             .show(ui, |ui| {
-                for (i, dist) in viewmodel.wsl.distributions.iter().enumerate() {
-                    let selected = viewmodel.wsl.selected_distribution == Some(i);
+                for (i, name, version, state, size_gb, path, selected) in distributions {
                     let frame = egui::Frame::none()
                         .fill(if selected {
                             ui.visuals().selection.bg_fill
@@ -43,7 +60,7 @@ pub fn show_wsl(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                     frame.show(ui, |ui| {
                         ui.horizontal(|ui| {
                             // Status indicator
-                            let status_color = match dist.state {
+                            let status_color = match state {
                                 winsweep_core::WslState::Running => egui::Color32::GREEN,
                                 winsweep_core::WslState::Stopped => egui::Color32::RED,
                                 _ => egui::Color32::YELLOW,
@@ -55,34 +72,39 @@ pub fn show_wsl(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                             ui.vertical(|ui| {
                                 ui.label(format!(
                                     "{} (WSL{})",
-                                    dist.name,
-                                    match dist.version {
+                                    name,
+                                    match version {
                                         winsweep_core::WslVersion::Wsl1 => "1",
                                         winsweep_core::WslVersion::Wsl2 => "2",
                                         winsweep_core::WslVersion::Unknown => "?",
                                     }
                                 ));
-                                ui.label(format!("State: {:?}", dist.state));
-                                ui.label(format!("Size: {:.1} GB", dist.size_gb));
-                                ui.label(format!("Path: {}", dist.path));
+                                ui.label(format!("State: {:?}", state));
+                                ui.label(format!("Size: {:.1} GB", size_gb));
+                                ui.label(format!("Path: {}", path));
                             });
 
                             // Actions
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if dist.state == winsweep_core::WslState::Running {
+                                    let name = name.clone();
+                                    if state == winsweep_core::WslState::Running {
                                         if ui.button("⏹ Stop").clicked() {
-                                            // TODO: Stop distribution
+                                            viewmodel.wsl.stop_distribution(&name);
                                         }
                                     } else {
                                         if ui.button("▶ Start").clicked() {
-                                            // TODO: Start distribution
+                                            viewmodel.wsl.start_distribution(&name);
                                         }
                                     }
 
                                     if ui.button("🗑️ Unregister").clicked() {
-                                        // TODO: Unregister distribution
+                                        if viewmodel.wsl.selected_distribution == Some(i) {
+                                            viewmodel.wsl.unregister_distribution(&name);
+                                        } else {
+                                            viewmodel.wsl.selected_distribution = Some(i);
+                                        }
                                     }
                                 },
                             );
@@ -103,9 +125,9 @@ pub fn show_wsl(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
             if index < viewmodel.wsl.distributions.len() {
                 ui.separator();
 
-                let dist = &viewmodel.wsl.distributions[index];
+                let dist_name = viewmodel.wsl.distributions[index].name.clone();
                 ui.horizontal(|ui| {
-                    ui.heading(format!("{} Actions", dist.name));
+                    ui.heading(format!("{} Actions", dist_name));
 
                     if viewmodel.wsl.compact_in_progress {
                         ui.spinner();
@@ -113,15 +135,19 @@ pub fn show_wsl(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                         ui.add(egui::ProgressBar::new(viewmodel.wsl.compact_progress));
                     } else {
                         if ui.button("🗜️ Compact Disk").clicked() {
+                            let dist_name = viewmodel.wsl.distributions[index].name.clone();
                             viewmodel.wsl.start_compact();
+                            viewmodel.start_wsl_compact_task(dist_name);
                         }
 
                         if ui.button("📁 Open in Explorer").clicked() {
-                            // TODO: Open distribution path
+                            let dist_name = viewmodel.wsl.distributions[index].name.clone();
+                            viewmodel.wsl.open_in_explorer(&dist_name);
                         }
 
                         if ui.button("⚙️ Settings").clicked() {
-                            // TODO: Open distribution settings
+                            viewmodel.wsl.status_message =
+                                Some("Distribution settings are not yet available".to_string());
                         }
                     }
                 });

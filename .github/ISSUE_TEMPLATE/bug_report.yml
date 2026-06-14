@@ -1,0 +1,64 @@
+name: Bug Report
+description: File a bug report for WinSweep
+title: "[Bug]: "
+labels: ["kind: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: input
+    id: version
+    attributes:
+      label: WinSweep Version
+      description: What version of WinSweep are you running?
+      placeholder: e.g., 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: windows-build
+    attributes:
+      label: Windows Version / Build
+      description: Run `winver` and paste the build number here.
+      placeholder: e.g., Windows 11 23H2 (22631.3880)
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      description: Provide a minimal set of steps that consistently reproduces the issue.
+      placeholder: |
+        1. Open WinSweep GUI
+        2. Click 'Start Scan' on C:\
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include any error messages.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log Snippet
+      description: Paste relevant lines from `%LocalAppData%\WinSweep\logs\winsweep.log` (if any).
+      render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our [Code of Conduct](../../CODE_OF_CONDUCT.md).
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

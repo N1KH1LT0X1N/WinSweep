@@ -3,19 +3,15 @@
 //! This module provides functionality to use the Windows Restart Manager
 //! to handle file locks and restart applications/services.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
-use windows::core::{GUID, HRESULT, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_SUCCESS, HANDLE};
+use windows::core::PWSTR;
 use windows::Win32::System::RestartManager::{
     RmEndSession, RmGetList, RmRegisterResources, RmRestart, RmShutdown, RmStartSession,
-    CCH_RM_MAX_APP_NAME, CCH_RM_MAX_SVC_NAME, CCH_RM_SESSION_KEY, RM_APP_STATUS, RM_APP_TYPE,
-    RM_REBOOT_REASON, RM_SHUTDOWN_TYPE,
+    CCH_RM_SESSION_KEY, RM_PROCESS_INFO,
 };
 
 /// Restart Manager for handling file locks and application restarts
@@ -83,14 +79,9 @@ impl RestartManager {
         let mut session_key = [0u16; CCH_RM_SESSION_KEY as usize];
         let mut session_handle = 0u32;
 
-        let result =
-            unsafe { RmStartSession(&mut session_handle, 0, PWSTR(session_key.as_mut_ptr())) };
-
-        if result != ERROR_SUCCESS {
-            return Err(anyhow::anyhow!(
-                "Failed to start Restart Manager session: error {:?}",
-                result
-            ));
+        unsafe {
+            RmStartSession(&mut session_handle, 0, PWSTR(session_key.as_mut_ptr()))
+                .map_err(|e| anyhow::anyhow!("Failed to start Restart Manager session: {}", e))?;
         }
 
         let key_string = String::from_utf16_lossy(&session_key)
@@ -110,37 +101,24 @@ impl RestartManager {
         info!("Registering {} files with Restart Manager", files.len());
 
         // Convert paths to wide strings
-        let mut file_ptrs: Vec<*const u16> = Vec::with_capacity(files.len());
         let mut wide_paths: Vec<Vec<u16>> = Vec::with_capacity(files.len());
-
         for file in files {
             let wide_path = file
                 .as_os_str()
                 .encode_wide()
                 .chain(std::iter::once(0))
                 .collect::<Vec<u16>>();
-            file_ptrs.push(wide_path.as_ptr());
             wide_paths.push(wide_path);
         }
+        let file_ptrs: Vec<windows::core::PCWSTR> = wide_paths
+            .iter()
+            .map(|p| windows::core::PCWSTR(p.as_ptr()))
+            .collect();
 
         // Register the files
-        let result = unsafe {
-            RmRegisterResources(
-                self.session_handle,
-                files.len() as u32,
-                file_ptrs.as_ptr(),
-                0,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-            )
-        };
-
-        if result != ERROR_SUCCESS {
-            return Err(anyhow::anyhow!(
-                "Failed to register resources: error {:?}",
-                result
-            ));
+        unsafe {
+            RmRegisterResources(self.session_handle, Some(&file_ptrs), None, None)
+                .map_err(|e| anyhow::anyhow!("Failed to register resources: {}", e))?;
         }
 
         Ok(())
@@ -152,64 +130,45 @@ impl RestartManager {
 
         // First call to get required buffer size
         let mut proc_info_needed = 0u32;
-        let mut apps_info_size = 0u32;
-
-        let result = unsafe {
+        let mut proc_info = 0u32;
+        let mut reboot_reasons = 0u32;
+        unsafe {
             RmGetList(
                 self.session_handle,
                 &mut proc_info_needed,
-                &mut apps_info_size,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &mut proc_info,
+                None,
+                &mut reboot_reasons,
             )
-        };
-
-        if result != ERROR_SUCCESS && result != 234 {
-            // 234 = ERROR_MORE_DATA
-            return Err(anyhow::anyhow!(
-                "Failed to get application list size: error {:?}",
-                result
-            ));
+            .map_err(|e| anyhow::anyhow!("Failed to get application list size: {}", e))?;
         }
 
-        // Allocate buffers
-        let mut proc_info = vec![0u32; proc_info_needed as usize];
-        let mut apps_info = vec![
-            RM_PROCESS_INFO {
-                Process: Default::default(),
-                strAppName: [0; CCH_RM_MAX_APP_NAME as usize],
-                strServiceShortName: [0; CCH_RM_MAX_SVC_NAME as usize],
-                ApplicationType: RM_APP_TYPE(0),
-                AppStatus: RM_APP_STATUS(0),
-                TSSessionId: 0,
-                bRestartable: 0,
-                bForceRestart: 0,
-            };
-            apps_info_size as usize
-        ];
+        // Allocate buffer
+        let mut apps_info: Vec<RM_PROCESS_INFO> = (0..proc_info_needed)
+            .map(|_| unsafe { std::mem::zeroed() })
+            .collect();
+        proc_info = proc_info_needed;
 
         // Get the actual list
-        let result = unsafe {
+        unsafe {
             RmGetList(
                 self.session_handle,
                 &mut proc_info_needed,
-                &mut apps_info_size,
-                proc_info.as_mut_ptr(),
-                apps_info.as_mut_ptr(),
+                &mut proc_info,
+                if apps_info.is_empty() {
+                    None
+                } else {
+                    Some(apps_info.as_mut_ptr())
+                },
+                &mut reboot_reasons,
             )
-        };
-
-        if result != ERROR_SUCCESS {
-            return Err(anyhow::anyhow!(
-                "Failed to get application list: error {:?}",
-                result
-            ));
+            .map_err(|e| anyhow::anyhow!("Failed to get application list: {}", e))?;
         }
 
         // Parse the results
         let mut applications = Vec::new();
 
-        for (i, app_info) in apps_info.iter().enumerate().take(apps_info_size as usize) {
+        for (_i, app_info) in apps_info.iter().enumerate().take(proc_info as usize) {
             let app_name = from_wide_array(&app_info.strAppName);
             let service_name = from_wide_array(&app_info.strServiceShortName);
 
@@ -220,19 +179,19 @@ impl RestartManager {
 
             let application = RestartApplication {
                 application_name: app_name,
-                application_type: ApplicationType::from(app_info.ApplicationType.0),
+                application_type: ApplicationType::from(app_info.ApplicationType.0 as u32),
                 service_short_name: if service_name.is_empty() {
                     None
                 } else {
                     Some(service_name)
                 },
-                application_status: ApplicationStatus::from(app_info.AppStatus.0),
+                application_status: ApplicationStatus::from(app_info.AppStatus),
                 process_id: if app_info.Process.dwProcessId == 0 {
                     None
                 } else {
                     Some(app_info.Process.dwProcessId)
                 },
-                can_restart: app_info.bRestartable != 0,
+                can_restart: app_info.bRestartable.as_bool(),
                 can_shutdown: true, // All can be shutdown
             };
 
@@ -246,19 +205,9 @@ impl RestartManager {
     pub fn shutdown_applications(&mut self) -> Result<()> {
         info!("Shutting down applications using resources");
 
-        let result = unsafe {
-            RmShutdown(
-                self.session_handle,
-                RM_SHUTDOWN_TYPE(RmShutdownTypeNormal as u32),
-                RM_REBOOT_REASON(RmRebootReasonNone as u32),
-            )
-        };
-
-        if result != ERROR_SUCCESS {
-            return Err(anyhow::anyhow!(
-                "Failed to shutdown applications: error {:?}",
-                result
-            ));
+        unsafe {
+            RmShutdown(self.session_handle, RM_SHUTDOWN_TYPE_NORMAL, None)
+                .map_err(|e| anyhow::anyhow!("Failed to shutdown applications: {}", e))?;
         }
 
         Ok(())
@@ -268,19 +217,9 @@ impl RestartManager {
     pub fn restart_applications(&mut self) -> Result<()> {
         info!("Restarting applications");
 
-        let result = unsafe {
-            RmRestart(
-                self.session_handle,
-                RM_REBOOT_REASON(RmRebootReasonNone as u32),
-                std::ptr::null_mut(),
-            )
-        };
-
-        if result != ERROR_SUCCESS {
-            return Err(anyhow::anyhow!(
-                "Failed to restart applications: error {:?}",
-                result
-            ));
+        unsafe {
+            RmRestart(self.session_handle, RM_REBOOT_REASON_NONE, None)
+                .map_err(|e| anyhow::anyhow!("Failed to restart applications: {}", e))?;
         }
 
         Ok(())
@@ -402,21 +341,8 @@ impl From<u32> for ApplicationStatus {
 }
 
 // Constants for Restart Manager
-const RmShutdownTypeNormal: u32 = 1;
-const RmRebootReasonNone: u32 = 0;
-
-// Windows API structure
-#[repr(C)]
-struct RM_PROCESS_INFO {
-    Process: windows::Win32::System::Threading::PROCESS_INFORMATION,
-    strAppName: [u16; CCH_RM_MAX_APP_NAME as usize],
-    strServiceShortName: [u16; CCH_RM_MAX_SVC_NAME as usize],
-    ApplicationType: RM_APP_TYPE,
-    AppStatus: RM_APP_STATUS,
-    TSSessionId: u32,
-    bRestartable: i32,
-    bForceRestart: i32,
-}
+const RM_SHUTDOWN_TYPE_NORMAL: u32 = 1;
+const RM_REBOOT_REASON_NONE: u32 = 0;
 
 /// Convert wide array to string
 fn from_wide_array(wide_array: &[u16]) -> String {
