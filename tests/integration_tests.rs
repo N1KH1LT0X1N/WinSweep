@@ -299,6 +299,7 @@ async fn test_docker_client() {
             println!(
                 "Docker daemon reported as running but listing images failed, skipping strict assertions: {err}"
             );
+            return;
         }
     }
 }
