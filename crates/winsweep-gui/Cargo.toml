@@ -31,7 +31,7 @@ egui_plot = "0.29"
 rfd = "0.14"  # File dialogs
 sysinfo = "0.32"
 winreg = "0.52"
-tray-icon = { version = "0.14", optional = true }  # System tray support
+tray-icon = { version = "0.24", optional = true }  # System tray support
 
 # Logging
 tracing = { workspace = true }
