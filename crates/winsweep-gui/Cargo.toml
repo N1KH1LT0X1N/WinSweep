@@ -18,7 +18,7 @@ winsweep-common = { path = "../winsweep-common" }
 tokio = { workspace = true }
 
 # GUI framework
-egui = "0.29"
+egui = "0.34"
 egui-winit = "0.29"
 winit = "0.30"
 eframe = { version = "0.29", default-features = false, features = [
