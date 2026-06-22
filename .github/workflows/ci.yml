@@ -55,9 +55,11 @@ jobs:
     
     strategy:
       matrix:
-        target:
-          - winsweep-cli
-          - winsweep-gui
+        include:
+          - target: winsweep-cli
+            binary: winsweep
+          - target: winsweep-gui
+            binary: winsweep-gui
           
     steps:
     - name: Checkout code
@@ -87,7 +89,7 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.target }}-windows
-        path: target/x86_64-pc-windows-gnu/release/${{ matrix.target }}.exe
+        path: target/x86_64-pc-windows-gnu/release/${{ matrix.binary }}.exe
 
   package:
     name: Create Release Package
@@ -111,7 +113,7 @@ jobs:
         New-Item -ItemType Directory -Path $distDir -Force
         
         # Copy binaries
-        Copy-Item artifacts\winsweep-cli-windows\winsweep-cli.exe $distDir\
+        Copy-Item artifacts\winsweep-cli-windows\winsweep.exe "$distDir\winsweep-cli.exe"
         Copy-Item artifacts\winsweep-gui-windows\winsweep-gui.exe $distDir\
         
         # Copy documentation
