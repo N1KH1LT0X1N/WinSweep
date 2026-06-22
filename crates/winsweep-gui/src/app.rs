@@ -128,12 +128,13 @@ impl eframe::App for WinSweepApp {
 
         // ── Minimize-to-tray on window close ─────────────────────────────────
         #[cfg(feature = "system-tray")]
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if self.viewmodel.config().ui.minimize_to_tray && self.tray_manager.is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                self.window_visible = false;
-            }
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.viewmodel.config().ui.minimize_to_tray
+            && self.tray_manager.is_some()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            self.window_visible = false;
         }
 
         // Apply theme from config

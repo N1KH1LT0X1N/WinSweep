@@ -486,7 +486,10 @@ mod tests {
             .unwrap();
 
         let manager = ChromeManager;
-        let result = manager.clean_paths(&[cache_dir.clone()]).await.unwrap();
+        let result = manager
+            .clean_paths(std::slice::from_ref(&cache_dir))
+            .await
+            .unwrap();
         assert_eq!(result.space_freed, 11, "should report freed bytes");
         assert!(!cache_dir.exists(), "cache dir should be deleted");
     }

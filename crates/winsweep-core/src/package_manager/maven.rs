@@ -19,14 +19,47 @@ impl MavenManager {
     }
 
     fn local_repo() -> PathBuf {
-        if let Ok(m2_home) = std::env::var("MAVEN_OPTS") {
-            // Very rough heuristic; most users rely on default
-            let _ = m2_home;
+        Self::resolve_local_repo(dirs::home_dir())
+    }
+
+    /// Inner logic extracted so tests can supply a custom home directory.
+    fn resolve_local_repo(home: Option<PathBuf>) -> PathBuf {
+        // 1. Some CI systems expose MAVEN_LOCAL_REPO directly.
+        if let Ok(repo) = std::env::var("MAVEN_LOCAL_REPO") {
+            let p = PathBuf::from(&repo);
+            if p.is_absolute() {
+                return p;
+            }
         }
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".m2")
-            .join("repository")
+
+        // 2. Parse ~/.m2/settings.xml for a custom <localRepository> element.
+        //    We do a lightweight text scan to avoid pulling in an XML crate.
+        if let Some(ref home) = home {
+            let settings = home.join(".m2").join("settings.xml");
+            if let Ok(content) = std::fs::read_to_string(&settings) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if let Some(inner) = line
+                        .strip_prefix("<localRepository>")
+                        .and_then(|s| s.strip_suffix("</localRepository>"))
+                    {
+                        let trimmed = inner.trim();
+                        if !trimmed.is_empty() {
+                            let p = PathBuf::from(trimmed);
+                            if p.is_absolute() {
+                                return p;
+                            }
+                            // Resolve relative paths against the home directory
+                            return home.join(trimmed);
+                        }
+                    }
+                }
+            }
+            // 3. Default: ~/.m2/repository
+            home.join(".m2").join("repository")
+        } else {
+            PathBuf::from(".m2").join("repository")
+        }
     }
 }
 
@@ -161,5 +194,72 @@ impl PackageManager for MavenManager {
 
     fn prevention_tip(&self) -> &'static str {
         "Use 'mvn dependency:purge-local-repository' to remove unused artifacts. Set localRepository to a shared path in settings.xml."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_maven_manager_creation() {
+        let manager = MavenManager::new().await;
+        assert!(manager.is_ok());
+        assert_eq!(manager.unwrap().name(), "maven");
+    }
+
+    #[test]
+    fn test_display_name() {
+        assert_eq!(MavenManager.display_name(), "Apache Maven");
+    }
+
+    /// MAVEN_LOCAL_REPO env var must override the default ~/.m2/repository path.
+    #[test]
+    fn test_local_repo_from_maven_local_repo_env() {
+        let dir = TempDir::new().unwrap();
+        let expected = dir.path().to_path_buf();
+        std::env::set_var("MAVEN_LOCAL_REPO", expected.to_str().unwrap());
+        let result = MavenManager::local_repo();
+        std::env::remove_var("MAVEN_LOCAL_REPO");
+        assert_eq!(result, expected);
+    }
+
+    /// When settings.xml contains a <localRepository> element the path must be used.
+    #[test]
+    fn test_local_repo_from_settings_xml() {
+        let home_dir = TempDir::new().unwrap();
+        let m2_dir = home_dir.path().join(".m2");
+        std::fs::create_dir_all(&m2_dir).unwrap();
+
+        let custom_repo = home_dir.path().join("my-repo");
+        std::fs::create_dir_all(&custom_repo).unwrap();
+
+        let settings_path = m2_dir.join("settings.xml");
+        let mut f = std::fs::File::create(&settings_path).unwrap();
+        writeln!(
+            f,
+            "<settings>\n  <localRepository>{}</localRepository>\n</settings>",
+            custom_repo.display()
+        )
+        .unwrap();
+
+        // Pass the temp home directly — no env var manipulation needed
+        std::env::remove_var("MAVEN_LOCAL_REPO");
+        let result = MavenManager::resolve_local_repo(Some(home_dir.path().to_path_buf()));
+        assert_eq!(result, custom_repo);
+    }
+
+    /// When neither env var nor settings.xml is present the default path is returned.
+    #[test]
+    fn test_local_repo_default() {
+        std::env::remove_var("MAVEN_LOCAL_REPO");
+        let result = MavenManager::local_repo();
+        assert!(
+            result.ends_with(std::path::Path::new(".m2/repository")),
+            "default must end with .m2/repository, got: {}",
+            result.display()
+        );
     }
 }

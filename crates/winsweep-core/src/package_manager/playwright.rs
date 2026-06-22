@@ -95,17 +95,25 @@ impl PackageManager for PlaywrightManager {
 
         info!("Cleaning Playwright browser cache");
 
-        // Prefer `playwright uninstall --all` so Playwright can track what it removes
-        let _playwright_cmd = if which("playwright").is_ok() {
-            "playwright"
+        // Prefer `playwright uninstall --all` (standalone CLI) so Playwright can track what it
+        // removes.  Fall back to `npx playwright` only when npx is available.  If neither is
+        // found, fall through to direct directory deletion.
+        let clean_result = if which("playwright").is_ok() {
+            tokio::process::Command::new("playwright")
+                .args(["uninstall", "--all"])
+                .output()
+                .await
+        } else if which("npx").is_ok() {
+            tokio::process::Command::new("npx")
+                .args(["playwright", "uninstall", "--all"])
+                .output()
+                .await
         } else {
-            "npx playwright" // fallback – may not parse as a command but we try
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "neither playwright nor npx found in PATH",
+            ))
         };
-
-        let clean_result = tokio::process::Command::new("npx")
-            .args(["playwright", "uninstall", "--all"])
-            .output()
-            .await;
 
         match clean_result {
             Ok(out) if out.status.success() => {
@@ -216,5 +224,52 @@ impl PackageManager for PlaywrightManager {
 
     fn prevention_tip(&self) -> &'static str {
         "Use 'npx playwright uninstall --all' for old browsers. Pin browser versions in CI to avoid redundant installs."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_playwright_manager_creation() {
+        let manager = PlaywrightManager::new().await;
+        assert!(manager.is_ok());
+        assert_eq!(manager.unwrap().name(), "playwright");
+    }
+
+    #[test]
+    fn test_display_name() {
+        assert_eq!(
+            PlaywrightManager.display_name(),
+            "Playwright (browser binaries)"
+        );
+    }
+
+    /// `browsers_cache()` must honour PLAYWRIGHT_BROWSERS_PATH env var.
+    #[test]
+    fn test_browsers_cache_env_override() {
+        std::env::set_var("PLAYWRIGHT_BROWSERS_PATH", "/custom/playwright");
+        let cache = PlaywrightManager::browsers_cache();
+        std::env::remove_var("PLAYWRIGHT_BROWSERS_PATH");
+        assert_eq!(
+            cache,
+            std::path::PathBuf::from("/custom/playwright"),
+            "PLAYWRIGHT_BROWSERS_PATH must override the default cache path"
+        );
+    }
+
+    /// When PLAYWRIGHT_BROWSERS_PATH is not set the default Windows path must be used.
+    #[test]
+    fn test_browsers_cache_default() {
+        std::env::remove_var("PLAYWRIGHT_BROWSERS_PATH");
+        let cache = PlaywrightManager::browsers_cache();
+        let cache_str = cache.to_string_lossy().to_lowercase();
+        // The path should contain "ms-playwright" on Windows
+        assert!(
+            cache_str.contains("ms-playwright"),
+            "default cache path must contain 'ms-playwright', got: {}",
+            cache.display()
+        );
     }
 }

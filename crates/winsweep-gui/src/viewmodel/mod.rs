@@ -125,6 +125,7 @@ pub struct PendingCleanup {
 
 impl WinSweepViewModel {
     /// Create a new view model
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         windows_detector: Option<WindowsEditionDetector>,
         wsl_detector: Option<WslDetector>,
@@ -555,11 +556,9 @@ impl WinSweepViewModel {
                                 if matches!(
                                     c.status,
                                     winsweep_core::docker::ContainerStatus::Exited
-                                ) {
-                                    if dc.remove_container(&c.id, false).await.is_ok() {
-                                        freed +=
-                                            c.size_rw.unwrap_or(0) + c.size_root_fs.unwrap_or(0);
-                                    }
+                                ) && dc.remove_container(&c.id, false).await.is_ok()
+                                {
+                                    freed += c.size_rw.unwrap_or(0) + c.size_root_fs.unwrap_or(0);
                                 }
                             }
                             Ok(freed)
@@ -568,10 +567,8 @@ impl WinSweepViewModel {
                             let images = dc.get_images().await.map_err(|e| anyhow::anyhow!(e))?;
                             let mut freed = 0u64;
                             for img in images {
-                                if img.dangling {
-                                    if dc.remove_image(&img.id, false).await.is_ok() {
-                                        freed += img.size;
-                                    }
+                                if img.dangling && dc.remove_image(&img.id, false).await.is_ok() {
+                                    freed += img.size;
                                 }
                             }
                             Ok(freed)
@@ -874,6 +871,9 @@ fn should_auto_clean(last: &Option<String>, threshold: std::time::Duration) -> b
     }
 }
 
+// Re-export sub-modules
+pub use docker::*;
+
 #[cfg(test)]
 mod tests {
     use super::should_auto_clean;
@@ -908,6 +908,3 @@ mod tests {
         ));
     }
 }
-
-// Re-export sub-modules
-pub use docker::*;

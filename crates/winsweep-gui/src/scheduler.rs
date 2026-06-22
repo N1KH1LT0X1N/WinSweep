@@ -5,7 +5,7 @@
 //! Uses `schtasks.exe` — no COM or UAC elevation is required for per-user tasks.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 const TASK_NAME: &str = "WinSweep Auto Cleanup";
@@ -51,7 +51,7 @@ impl TaskFrequency {
 /// # Arguments
 /// * `exe_path` — path to `winsweep-gui.exe`
 /// * `frequency` — how often the task should fire
-pub fn register_task(exe_path: &PathBuf, frequency: TaskFrequency) -> Result<String> {
+pub fn register_task(exe_path: &Path, frequency: TaskFrequency) -> Result<String> {
     // Remove any existing version first (ignore errors)
     let _ = remove_task();
 

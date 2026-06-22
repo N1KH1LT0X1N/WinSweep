@@ -128,7 +128,7 @@ pub const NEVER_DELETE_PATTERNS: &[&str] = &[
 ];
 
 /// Check if a path should never be deleted
-pub fn should_never_delete(path: &PathBuf) -> bool {
+pub fn should_never_delete(path: &Path) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
 
     // Check exact paths
@@ -141,7 +141,8 @@ pub fn should_never_delete(path: &PathBuf) -> bool {
     // Check if it's a parent of a never-delete path
     for never_path in NEVER_DELETE_PATHS {
         let never_path_buf = PathBuf::from(never_path);
-        if never_path_buf.starts_with(path) {
+        let never_path_lower = never_path_buf.to_string_lossy().to_lowercase();
+        if never_path_lower.starts_with(&path_str) {
             return true;
         }
     }
@@ -261,5 +262,26 @@ mod tests {
     fn test_allow_delete_node_modules() {
         let path = PathBuf::from(r"C:\project\node_modules\some-package\bin\cli.exe");
         assert!(!should_never_delete(&path));
+    }
+
+    #[test]
+    fn test_never_delete_mixed_case_parent() {
+        // Test that mixed-case paths are correctly identified as parents of protected paths
+        // E.g., scanning c:\windows should protect C:\Windows\System32
+        let path = PathBuf::from(r"c:\windows");
+        assert!(
+            should_never_delete(&path),
+            "lowercase parent should match uppercase protected path"
+        );
+    }
+
+    #[test]
+    fn test_never_delete_mixed_case_exact() {
+        // Test that mixed-case exact path matches work
+        let path = PathBuf::from(r"c:\windows\system32");
+        assert!(
+            should_never_delete(&path),
+            "lowercase exact path should match uppercase protected path"
+        );
     }
 }

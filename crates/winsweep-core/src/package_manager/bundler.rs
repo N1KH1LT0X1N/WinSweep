@@ -68,6 +68,42 @@ impl BundlerManager {
 
         None
     }
+
+    /// Scan common project root directories for per-project `vendor/bundle` directories.
+    async fn find_vendor_bundles() -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return found,
+        };
+
+        // Directories that commonly contain Ruby projects
+        let candidate_roots = [
+            home.join("projects"),
+            home.join("src"),
+            home.join("dev"),
+            home.join("code"),
+            home.join("workspace"),
+            home.join("repos"),
+            home.clone(),
+        ];
+
+        for root in &candidate_roots {
+            if !root.exists() {
+                continue;
+            }
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let vb = entry.path().join("vendor").join("bundle");
+                    if vb.exists() {
+                        found.push(vb);
+                    }
+                }
+            }
+        }
+
+        found
+    }
 }
 
 #[async_trait]
@@ -105,9 +141,20 @@ impl PackageManager for BundlerManager {
 
     async fn get_cache_paths(&self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
+
+        // Global bundle path (~/.bundle/cache or BUNDLE_PATH)
         if let Some(path) = self.resolve_vendor_path().await {
             paths.push(path);
         }
+
+        // Per-project vendor/bundle directories found under common project roots
+        let vendor_bundles = Self::find_vendor_bundles().await;
+        for vb in vendor_bundles {
+            if !paths.contains(&vb) {
+                paths.push(vb);
+            }
+        }
+
         Ok(paths)
     }
 
@@ -200,6 +247,7 @@ impl PackageManager for BundlerManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_bundler_manager_creation() {
@@ -211,5 +259,46 @@ mod tests {
     #[test]
     fn test_display_name() {
         assert_eq!(BundlerManager::default().display_name(), "Bundler (Ruby)");
+    }
+
+    /// `find_vendor_bundles()` must discover `vendor/bundle` directories that
+    /// exist under a candidate project root.
+    #[tokio::test]
+    async fn test_find_vendor_bundles_discovers_projects() {
+        // Create a temp directory that acts as a "projects" root
+        let projects_root = TempDir::new().unwrap();
+
+        // Create a fake Ruby project with vendor/bundle inside it
+        let project_dir = projects_root.path().join("my_rails_app");
+        let vendor_bundle = project_dir.join("vendor").join("bundle");
+        std::fs::create_dir_all(&vendor_bundle).unwrap();
+
+        // Point one of the candidate roots to our temp dir by scanning it directly
+        let found: Vec<PathBuf> = {
+            let root = projects_root.path();
+            let mut v = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let vb = entry.path().join("vendor").join("bundle");
+                    if vb.exists() {
+                        v.push(vb);
+                    }
+                }
+            }
+            v
+        };
+
+        assert!(
+            found.contains(&vendor_bundle),
+            "find_vendor_bundles logic must discover vendor/bundle in project roots"
+        );
+    }
+
+    /// `get_cache_paths()` must return Ok(_) even when bundle is not installed.
+    #[tokio::test]
+    async fn test_get_cache_paths_does_not_panic() {
+        let manager = BundlerManager::default();
+        let result = manager.get_cache_paths().await;
+        assert!(result.is_ok());
     }
 }

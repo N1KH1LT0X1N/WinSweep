@@ -164,6 +164,6 @@ mod tests {
 
     #[test]
     fn test_display_name() {
-        assert_eq!(UvManager::default().display_name(), "uv (Python)");
+        assert_eq!(UvManager.display_name(), "uv (Python)");
     }
 }

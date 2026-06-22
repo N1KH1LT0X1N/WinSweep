@@ -303,7 +303,6 @@ pub fn get_data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn test_default_config() {

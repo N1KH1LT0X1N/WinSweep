@@ -22,8 +22,10 @@ pub struct NpmManager {
 impl NpmManager {
     /// Create a new npm manager
     pub async fn new() -> Result<Self> {
+        // Resolve npm executable eagerly so cache clean and version queries work.
+        let npm_path = which("npm.cmd").or_else(|_| which("npm")).ok();
         Ok(Self {
-            npm_path: None,
+            npm_path,
             cache_path: None,
         })
     }
@@ -339,5 +341,56 @@ impl PackageManager for NpmManager {
 
     fn prevention_tip(&self) -> &'static str {
         "Use 'npm config set cache-max 86400000' to limit cache TTL. Periodically run 'npm cache clean --force'."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_npm_manager_creation() {
+        let manager = NpmManager::new().await;
+        assert!(manager.is_ok(), "NpmManager::new() must succeed");
+        assert_eq!(manager.unwrap().name(), "npm");
+    }
+
+    #[test]
+    fn test_display_name() {
+        assert_eq!(
+            NpmManager::default().display_name(),
+            "Node Package Manager (npm)"
+        );
+    }
+
+    /// When npm is present in PATH the manager must eagerly resolve its path in
+    /// `new()` so that `npm cache clean --force` is actually executed.
+    #[tokio::test]
+    async fn test_npm_path_initialized_when_npm_available() {
+        if which::which("npm.cmd")
+            .or_else(|_| which::which("npm"))
+            .is_err()
+        {
+            // npm not installed in this environment — skip
+            return;
+        }
+        let manager = NpmManager::new().await.unwrap();
+        assert!(
+            manager.npm_path.is_some(),
+            "npm_path must be populated when npm is in PATH"
+        );
+    }
+
+    /// Ensure the fallback cache path logic resolves to some path even without npm.
+    #[tokio::test]
+    async fn test_get_cache_path_fallback() {
+        // Create a manager with npm_path forced to None
+        let manager = NpmManager {
+            npm_path: None,
+            cache_path: None,
+        };
+        // Should fall back to ~/.npm or AppData\Local\npm-cache without panicking
+        let result = manager.get_cache_path().await;
+        assert!(result.is_ok(), "get_cache_path fallback must not error");
     }
 }

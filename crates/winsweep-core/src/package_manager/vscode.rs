@@ -18,20 +18,45 @@ impl VsCodeManager {
     }
 
     fn code_dir() -> Option<PathBuf> {
-        // %APPDATA%\Code
+        // Portable VS Code sets VSCODE_PORTABLE to the data directory root.
+        // In portable mode the user-data lives at $VSCODE_PORTABLE/user-data.
+        if let Ok(portable) = std::env::var("VSCODE_PORTABLE") {
+            let p = PathBuf::from(portable).join("user-data");
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        // Standard install: %APPDATA%\Code on Windows
         dirs::config_dir().map(|d| d.join("Code"))
     }
 
     fn cache_dirs() -> Vec<PathBuf> {
         let mut paths = Vec::new();
+        let cache_subdirs = ["Cache", "CachedData", "CachedExtensions", "logs"];
+
+        // Standard / portable VS Code
         if let Some(base) = Self::code_dir() {
-            for sub in &["Cache", "CachedData", "CachedExtensions", "logs"] {
+            for sub in &cache_subdirs {
                 let p = base.join(sub);
                 if p.exists() {
                     paths.push(p);
                 }
             }
         }
+
+        // VS Code Insiders (uses a separate config directory)
+        if let Some(config) = dirs::config_dir() {
+            let insiders = config.join("Code - Insiders");
+            if insiders.exists() {
+                for sub in &cache_subdirs {
+                    let p = insiders.join(sub);
+                    if p.exists() {
+                        paths.push(p);
+                    }
+                }
+            }
+        }
+
         paths
     }
 }
@@ -152,6 +177,7 @@ impl PackageManager for VsCodeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_vscode_manager_creation() {
@@ -162,9 +188,54 @@ mod tests {
 
     #[test]
     fn test_display_name() {
+        assert_eq!(VsCodeManager.display_name(), "Visual Studio Code");
+    }
+
+    /// `code_dir()` must honour VSCODE_PORTABLE env var and return the
+    /// user-data sub-directory when it exists.
+    #[test]
+    fn test_code_dir_uses_vscode_portable_env() {
+        let tmp = TempDir::new().unwrap();
+        let user_data = tmp.path().join("user-data");
+        std::fs::create_dir_all(&user_data).unwrap();
+
+        std::env::set_var("VSCODE_PORTABLE", tmp.path());
+        let dir = VsCodeManager::code_dir();
+        std::env::remove_var("VSCODE_PORTABLE");
+
         assert_eq!(
-            VsCodeManager::default().display_name(),
-            "Visual Studio Code"
+            dir,
+            Some(user_data),
+            "code_dir() must use VSCODE_PORTABLE/user-data when it exists"
         );
+    }
+
+    /// When VSCODE_PORTABLE points to a directory without user-data, code_dir()
+    /// must fall back to the standard config path.
+    #[test]
+    fn test_code_dir_falls_back_when_portable_user_data_absent() {
+        let tmp = TempDir::new().unwrap();
+        // Do NOT create user-data inside tmp
+        std::env::set_var("VSCODE_PORTABLE", tmp.path());
+        let dir = VsCodeManager::code_dir();
+        std::env::remove_var("VSCODE_PORTABLE");
+
+        // The fallback is dirs::config_dir().map(|d| d.join("Code"))
+        let expected = dirs::config_dir().map(|d| d.join("Code"));
+        assert_eq!(dir, expected, "must fall back to standard Code config dir");
+    }
+
+    /// `cache_dirs()` must not panic even if VS Code is not installed.
+    #[test]
+    fn test_cache_dirs_no_panic() {
+        let dirs = VsCodeManager::cache_dirs();
+        // All returned paths must actually exist on disk
+        for p in &dirs {
+            assert!(
+                p.exists(),
+                "cache_dirs() must only return paths that exist: {}",
+                p.display()
+            );
+        }
     }
 }

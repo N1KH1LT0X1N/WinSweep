@@ -172,6 +172,6 @@ mod tests {
 
     #[test]
     fn test_display_name() {
-        assert_eq!(MinikubeManager::default().display_name(), "Minikube");
+        assert_eq!(MinikubeManager.display_name(), "Minikube");
     }
 }

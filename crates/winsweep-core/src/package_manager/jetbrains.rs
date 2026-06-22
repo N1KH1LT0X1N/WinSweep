@@ -174,6 +174,6 @@ mod tests {
 
     #[test]
     fn test_display_name() {
-        assert_eq!(JetBrainsManager::default().display_name(), "JetBrains IDEs");
+        assert_eq!(JetBrainsManager.display_name(), "JetBrains IDEs");
     }
 }

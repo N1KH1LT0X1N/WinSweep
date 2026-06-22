@@ -445,12 +445,11 @@ fn matches_pattern(path: &Path, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
 
     #[test]
     fn test_detect_rust_project() {
-        let path = PathBuf::from("/test/project");
+        let _path = PathBuf::from("/test/project");
         // Would need to create actual test files for this to work
         // assert_eq!(detect_project_type(&path), Some(ProjectType::Rust));
     }

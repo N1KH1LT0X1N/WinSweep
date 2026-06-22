@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn test_audit_log_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let log_file = temp_dir.path().join("test.log");
+        let _log_file = temp_dir.path().join("test.log");
 
         let entry = AuditLogEntry {
             id: Uuid::new_v4(),

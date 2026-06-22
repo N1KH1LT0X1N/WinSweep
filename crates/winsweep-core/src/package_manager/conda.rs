@@ -7,7 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 use which::which;
 
 /// Conda / Mamba cache manager
@@ -43,10 +43,16 @@ impl CondaManager {
             r"C:\Users\%USERNAME%\.conda\pkgs",
         ];
         for b in &bases {
-            let expanded = shellexpand::full(b).unwrap_or_default().into_owned();
-            let p = PathBuf::from(&expanded);
-            if p.exists() {
-                dirs.push(p);
+            match shellexpand::full(b) {
+                Ok(expanded) => {
+                    let p = PathBuf::from(expanded.as_ref());
+                    if p.exists() {
+                        dirs.push(p);
+                    }
+                }
+                Err(e) => {
+                    warn!("conda: failed to expand path '{}': {}", b, e);
+                }
             }
         }
 
@@ -217,5 +223,44 @@ mod tests {
     #[test]
     fn test_display_name() {
         assert_eq!(CondaManager::default().display_name(), "conda / mamba");
+    }
+
+    /// `resolve_pkgs_dirs()` must never include a path whose string is empty,
+    /// which previously happened when shellexpand::full() failed silently.
+    #[test]
+    fn test_resolve_pkgs_dirs_no_empty_paths() {
+        let dirs = CondaManager::resolve_pkgs_dirs();
+        for p in &dirs {
+            assert!(
+                !p.as_os_str().is_empty(),
+                "resolve_pkgs_dirs must not yield empty paths"
+            );
+        }
+    }
+
+    /// `resolve_pkgs_dirs()` must not panic even when USERNAME env var is unset.
+    #[test]
+    fn test_resolve_pkgs_dirs_survives_missing_username() {
+        let old = std::env::var("USERNAME").ok();
+        std::env::remove_var("USERNAME");
+        // Should not panic regardless of shellexpand result
+        let _dirs = CondaManager::resolve_pkgs_dirs();
+        if let Some(v) = old {
+            std::env::set_var("USERNAME", v);
+        }
+    }
+
+    /// Paths returned by `resolve_pkgs_dirs()` must actually exist on disk
+    /// (they are only added when `p.exists()` is true).
+    #[test]
+    fn test_resolve_pkgs_dirs_all_exist() {
+        let dirs = CondaManager::resolve_pkgs_dirs();
+        for p in &dirs {
+            assert!(
+                p.exists(),
+                "resolve_pkgs_dirs must only return paths that exist: {}",
+                p.display()
+            );
+        }
     }
 }

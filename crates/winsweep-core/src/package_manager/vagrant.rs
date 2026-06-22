@@ -172,6 +172,6 @@ mod tests {
 
     #[test]
     fn test_display_name() {
-        assert_eq!(VagrantManager::default().display_name(), "Vagrant");
+        assert_eq!(VagrantManager.display_name(), "Vagrant");
     }
 }

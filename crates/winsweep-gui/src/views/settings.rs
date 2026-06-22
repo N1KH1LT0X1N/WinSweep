@@ -75,11 +75,10 @@ pub fn show_settings(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
                     egui::Button::new("💾 Save Settings"),
                 )
                 .clicked()
+                && viewmodel.settings.save_settings().is_ok()
             {
-                if viewmodel.settings.save_settings().is_ok() {
-                    let updated = viewmodel.settings.config().clone();
-                    viewmodel.set_config(updated);
-                }
+                let updated = viewmodel.settings.config().clone();
+                viewmodel.set_config(updated);
             }
         });
     });

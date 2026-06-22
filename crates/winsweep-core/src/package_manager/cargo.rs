@@ -22,8 +22,10 @@ pub struct CargoManager {
 impl CargoManager {
     /// Create a new cargo manager
     pub async fn new() -> Result<Self> {
+        // Resolve cargo executable eagerly so cargo clean and version queries work.
+        let cargo_path = which("cargo.exe").or_else(|_| which("cargo")).ok();
         Ok(Self {
-            cargo_path: None,
+            cargo_path,
             cargo_home: None,
         })
     }
@@ -206,10 +208,8 @@ impl PackageManager for CargoManager {
         // Get current directory to restore later
         let current_dir = std::env::current_dir()?;
 
-        // Use cargo clean if cargo_home is set
-        if let Some(ref _cargo_home) = self.cargo_home {
-            let cargo_path = self.get_cargo_path()?;
-
+        // Run cargo clean when cargo is available (cleans target/ in the current workspace)
+        if let Ok(cargo_path) = self.get_cargo_path() {
             let output = Command::new(cargo_path)
                 .args(["clean"])
                 .current_dir(&current_dir)
@@ -354,5 +354,70 @@ impl PackageManager for CargoManager {
 
     fn prevention_tip(&self) -> &'static str {
         "Use 'cargo sweep' or set CARGO_TARGET_DIR to a shared directory. Clean old registry versions with 'cargo cache --autoclean'."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cargo_manager_creation() {
+        let manager = CargoManager::new().await;
+        assert!(manager.is_ok(), "CargoManager::new() must succeed");
+        assert_eq!(manager.unwrap().name(), "cargo");
+    }
+
+    #[test]
+    fn test_display_name() {
+        assert_eq!(
+            CargoManager::default().display_name(),
+            "Rust Package Manager (Cargo)"
+        );
+    }
+
+    /// cargo is always available inside a `cargo test` run, so `cargo_path`
+    /// must be populated after construction.
+    #[tokio::test]
+    async fn test_cargo_path_initialized() {
+        let manager = CargoManager::new().await.unwrap();
+        assert!(
+            manager.cargo_path.is_some(),
+            "cargo_path must be populated when cargo is in PATH (always true inside `cargo test`)"
+        );
+    }
+
+    /// `get_cargo_path()` must succeed when cargo is in PATH (always true here).
+    #[test]
+    fn test_get_cargo_path_succeeds() {
+        // Use the cached path if available, otherwise fall back to which()
+        let manager = CargoManager {
+            cargo_path: None,
+            cargo_home: None,
+        };
+        let result = manager.get_cargo_path();
+        assert!(result.is_ok(), "get_cargo_path() must find cargo in PATH");
+    }
+
+    /// `get_cargo_home()` must return ~/.cargo by default.
+    #[tokio::test]
+    async fn test_get_cargo_home_default() {
+        let manager = CargoManager::default();
+        let home = manager.get_cargo_home().await;
+        assert!(home.is_ok());
+        assert!(
+            home.unwrap().ends_with(".cargo"),
+            "default cargo home must end with .cargo"
+        );
+    }
+
+    /// CARGO_HOME env var must be honoured.
+    #[tokio::test]
+    async fn test_cargo_home_env_var() {
+        std::env::set_var("CARGO_HOME", "/tmp/test_cargo_home");
+        let manager = CargoManager::default();
+        let home = manager.get_cargo_home().await.unwrap();
+        std::env::remove_var("CARGO_HOME");
+        assert_eq!(home, std::path::PathBuf::from("/tmp/test_cargo_home"));
     }
 }

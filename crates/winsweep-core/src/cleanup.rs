@@ -263,7 +263,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use tempfile::TempDir;
-    use winsweep_common::types::{FileType, ProjectType};
+    use winsweep_common::types::FileType;
 
     #[tokio::test]
     async fn test_cleanup_manager() {

@@ -20,10 +20,9 @@ impl GitLfsManager {
     }
 
     fn lfs_cache_dir() -> PathBuf {
-        // git lfs stores objects at $(git lfs env | grep LocalWorkingDir)/lfs/objects
-        // For the global cache it's inside the git object store.
-        // The easiest portable path is: `git lfs env` → LFS_OBJECTS_DIR
-        // Fallback: %APPDATA%\Git\lfs\objects
+        // git lfs stores objects at $(git lfs env | grep LocalWorkingDir)/lfs/objects.
+        // For the global cache it is inside the git object store.
+        // Fallback: %APPDATA%\Git\lfs\objects  (Git for Windows ≤ 2.x default)
         if let Ok(appdata) = std::env::var("APPDATA") {
             let p = PathBuf::from(appdata)
                 .join("Git")
@@ -33,6 +32,7 @@ impl GitLfsManager {
                 return p;
             }
         }
+        // Secondary fallback for non-Windows or non-standard Git installs
         dirs::home_dir()
             .unwrap_or_default()
             .join(".git")
@@ -79,7 +79,24 @@ impl PackageManager for GitLfsManager {
     }
 
     async fn get_cache_paths(&self) -> Result<Vec<PathBuf>> {
-        // Try to resolve via `git lfs env`
+        // 1. Try `git config --get lfs.storage` — the most authoritative global setting.
+        if let Ok(output) = tokio::process::Command::new("git")
+            .args(["config", "--get", "lfs.storage"])
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    let path = PathBuf::from(&path_str).join("objects");
+                    if path.exists() {
+                        return Ok(vec![path]);
+                    }
+                }
+            }
+        }
+
+        // 2. Try to resolve via `git lfs env`
         if let Ok(output) = tokio::process::Command::new("git")
             .args(["lfs", "env"])
             .output()
@@ -100,6 +117,7 @@ impl PackageManager for GitLfsManager {
             }
         }
 
+        // 3. Static fallback
         let fallback = Self::lfs_cache_dir();
         if fallback.exists() {
             Ok(vec![fallback])
@@ -185,5 +203,41 @@ impl PackageManager for GitLfsManager {
 
     fn prevention_tip(&self) -> &'static str {
         "Run 'git lfs prune' to remove unreferenced objects. Set lfs.fetchrecentrefsdays to a lower value."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_git_lfs_manager_creation() {
+        let manager = GitLfsManager::new().await;
+        assert!(manager.is_ok());
+        assert_eq!(manager.unwrap().name(), "git_lfs");
+    }
+
+    #[test]
+    fn test_display_name() {
+        assert_eq!(GitLfsManager.display_name(), "Git LFS");
+    }
+
+    /// `lfs_cache_dir()` must always return a non-empty path.
+    #[test]
+    fn test_lfs_cache_dir_is_non_empty() {
+        let dir = GitLfsManager::lfs_cache_dir();
+        assert!(
+            !dir.as_os_str().is_empty(),
+            "lfs_cache_dir must not return an empty path"
+        );
+    }
+
+    /// `get_cache_paths()` must return Ok(_) even when git-lfs is not installed.
+    #[tokio::test]
+    async fn test_get_cache_paths_does_not_panic() {
+        let manager = GitLfsManager;
+        // Should not panic or return Err regardless of git-lfs availability
+        let result = manager.get_cache_paths().await;
+        assert!(result.is_ok());
     }
 }

@@ -380,7 +380,7 @@ async fn try_scan_artifact_dir(
         .map(DateTime::<Utc>::from)
         .unwrap_or_else(Utc::now);
 
-    let is_safe_to_delete = !should_never_delete(&path.to_path_buf());
+    let is_safe_to_delete = !should_never_delete(path);
     let deletion_reason = if !is_safe_to_delete {
         Some("In NEVER_DELETE list".to_string())
     } else {
@@ -451,7 +451,7 @@ async fn scan_file(
     };
 
     // Check if it's safe to delete
-    let is_safe_to_delete = !should_never_delete(&path.to_path_buf());
+    let is_safe_to_delete = !should_never_delete(path);
     let deletion_reason = if !is_safe_to_delete {
         Some("In NEVER_DELETE list".to_string())
     } else {

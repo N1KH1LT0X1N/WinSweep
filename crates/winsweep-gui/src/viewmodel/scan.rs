@@ -149,16 +149,11 @@ impl ScanViewModel {
 
         if let Some(ref mut handle) = self.scan_handle {
             let mut received = 0;
-            loop {
-                match handle.try_recv() {
-                    Some(result) => {
-                        received += 1;
-                        if result.size_bytes >= self.scan_options.min_file_size {
-                            self.raw_results.push(result.clone());
-                            self.scan_results.push(map_scan_result(&result));
-                        }
-                    }
-                    None => break,
+            while let Some(result) = handle.try_recv() {
+                received += 1;
+                if result.size_bytes >= self.scan_options.min_file_size {
+                    self.raw_results.push(result.clone());
+                    self.scan_results.push(map_scan_result(&result));
                 }
             }
             self.items_received += received;

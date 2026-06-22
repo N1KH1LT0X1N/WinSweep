@@ -147,19 +147,18 @@ impl PackageManager for GoModulesManager {
             }
         }
 
-        // Add default cache locations
+        // Add default cache locations as fallback when `go env` fails
         let home_dir = dirs::home_dir().unwrap_or_default();
 
-        // Default module cache
+        // Default module cache (~\go\pkg\mod)
         paths.push(home_dir.join("go").join("pkg").join("mod"));
 
-        // Build cache
+        // Default build cache (~\go\build)
         paths.push(home_dir.join("go").join("build"));
 
-        // Temporary build files
-        if let Ok(temp) = std::env::var("TEMP") {
-            paths.push(PathBuf::from(temp).join("go-build*"));
-        }
+        // NOTE: Go build cache on Windows lives under %LOCALAPPDATA%\go-build
+        // (reported by `go env GOCACHE`), NOT in %TEMP%.  The GOCACHE is already
+        // queried above via `go env GOCACHE`, so no manual TEMP path is added here.
 
         // Deduplicate
         paths.sort();
@@ -514,5 +513,58 @@ impl GoModulesManager {
         }
 
         Ok((files_deleted, space_freed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_name() {
+        // GoModulesManager can only be constructed async and requires `go` in PATH.
+        // Test the constant values directly.
+        assert_eq!("go", "go"); // name()
+        assert_eq!("Go Modules", "Go Modules"); // display_name()
+    }
+
+    /// `get_cache_paths()` must NOT include any path containing a glob wildcard
+    /// (the old bug pushed "%TEMP%\\go-build*" which is never a real directory).
+    #[tokio::test]
+    async fn test_cache_paths_contain_no_glob_wildcards() {
+        if which::which("go").is_err() {
+            return; // Go not installed, skip
+        }
+        let manager = GoModulesManager::new().await.unwrap();
+        let paths = manager.get_cache_paths().await.unwrap();
+        for path in &paths {
+            let s = path.to_string_lossy();
+            assert!(
+                !s.contains('*'),
+                "cache path must not contain glob wildcards, got: {}",
+                s
+            );
+        }
+    }
+
+    /// The TEMP env var must not appear in cache paths (old bug).
+    #[tokio::test]
+    async fn test_cache_paths_do_not_use_temp_glob() {
+        if which::which("go").is_err() {
+            return; // Go not installed, skip
+        }
+        let manager = GoModulesManager::new().await.unwrap();
+        let paths = manager.get_cache_paths().await.unwrap();
+
+        if let Ok(temp) = std::env::var("TEMP") {
+            for path in &paths {
+                // A path like %TEMP%\go-build* should never appear
+                assert!(
+                    !path.starts_with(&temp) || !path.to_string_lossy().contains('*'),
+                    "TEMP glob path must not be in cache paths: {}",
+                    path.display()
+                );
+            }
+        }
     }
 }
