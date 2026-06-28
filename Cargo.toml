@@ -55,7 +55,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 
 # Windows specific
-windows = { version = "0.52", features = [
+windows = { version = "0.57", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
