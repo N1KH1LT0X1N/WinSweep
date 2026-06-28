@@ -112,7 +112,7 @@ sha2 = "0.10"
 hex = "0.4"
 futures = "0.3"
 async-trait = "0.1"
-dirs = "5.0"
+dirs = "6.0"
 
 # Internal workspace dependencies
 winsweep-common = { path = "crates/winsweep-common" }
