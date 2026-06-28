@@ -88,7 +88,7 @@ crossterm = "0.29"
 # windows-ui = "0.1"  # Will add when implementing Phase 4
 
 # Utilities
-which = "5.0"
+which = "8.0"
 walkdir = "2.4"
 ignore = "0.4"
 glob = "0.3"
