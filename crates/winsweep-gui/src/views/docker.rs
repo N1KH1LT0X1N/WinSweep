@@ -116,10 +116,7 @@ pub fn show_docker(ui: &mut egui::Ui, viewmodel: &mut WinSweepViewModel) {
             }
 
             if ui.button("🧹 Prune System").clicked() {
-                viewmodel.start_docker_prune_task("containers");
-                viewmodel.start_docker_prune_task("images");
-                viewmodel.start_docker_prune_task("volumes");
-                viewmodel.start_docker_prune_task("networks");
+                viewmodel.start_docker_prune_all_task();
             }
         }
     });

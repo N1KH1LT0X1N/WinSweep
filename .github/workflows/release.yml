@@ -15,12 +15,15 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: x86_64-pc-windows-gnu
+
+    - name: Install MinGW
+      run: choco install mingw -y
 
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -88,7 +91,7 @@ jobs:
       shell: powershell
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v3
+      uses: softprops/action-gh-release@v2
       with:
         files: |
           winsweep-*-windows-x64.zip

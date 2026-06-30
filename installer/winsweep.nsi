@@ -9,7 +9,7 @@
   !define PRODUCT_VERSION "0.1.0"
 !endif
 !define PRODUCT_PUBLISHER "WinSweep Team"
-!define PRODUCT_WEB_SITE "https://github.com/winsweep/winsweep"
+!define PRODUCT_WEB_SITE "https://github.com/N1KH1LT0X1N/WinSweep"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\winsweep-gui.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"

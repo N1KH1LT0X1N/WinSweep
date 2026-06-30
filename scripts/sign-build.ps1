@@ -72,7 +72,6 @@ foreach ($binary in $binaries) {
     
     $arguments = @(
         "sign",
-        "/f", $CertificateThumbprint,
         "/sha1", $CertificateThumbprint,
         "/tr", $TimestampServer,
         "/td", "sha256",

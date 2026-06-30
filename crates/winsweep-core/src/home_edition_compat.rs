@@ -6,6 +6,7 @@
 use crate::windows_api::WindowsApi;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
@@ -148,39 +149,113 @@ impl HomeEditionCompat {
     pub async fn compact_wsl_vhdx(&self, distribution: &str) -> Result<WslCompactResult> {
         info!("Compacting WSL2 VHDX for distribution: {}", distribution);
 
-        // Method 1: Try wsl --manage if available
-        if self.try_wsl_manage_compact(distribution).await? {
-            return Ok(WslCompactResult {
-                method: WslCompactMethod::WslManage,
-                success: true,
-                message: "Successfully compacted using wsl --manage".to_string(),
-            });
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut attempts = 0u32;
+        let mut last_message = String::new();
+
+        // The VHDX is locked while any distribution is running, so fully shut
+        // WSL down before touching the file.
+        self.shutdown_wsl().await;
+
+        // Sparse detection is advisory: a non-sparse VHDX reclaims little space.
+        if let Ok(path) = self.find_wsl_vhdx_path(distribution) {
+            if path.exists() && !Self::is_sparse_vhdx(&path) {
+                warn!(
+                    "VHDX {} is not sparse; compaction may reclaim little space",
+                    path.display()
+                );
+            }
         }
 
-        // Method 2: Try wslconfig.exe
-        if self.try_wslconfig_compact(distribution).await? {
-            return Ok(WslCompactResult {
-                method: WslCompactMethod::Wslconfig,
-                success: true,
-                message: "Successfully compacted using wslconfig.exe".to_string(),
-            });
-        }
+        while attempts < MAX_ATTEMPTS {
+            attempts += 1;
 
-        // Method 3: Use diskpart directly (Home edition fallback)
-        if self.try_diskpart_compact(distribution).await? {
-            return Ok(WslCompactResult {
-                method: WslCompactMethod::Diskpart,
-                success: true,
-                message: "Successfully compacted using diskpart".to_string(),
-            });
+            // Method 1: Try wsl --manage if available
+            if self.try_wsl_manage_compact(distribution).await? {
+                return Ok(WslCompactResult {
+                    method: WslCompactMethod::WslManage,
+                    success: true,
+                    attempts,
+                    message: "Successfully compacted using wsl --manage".to_string(),
+                });
+            }
+
+            // Method 2: Try wslconfig.exe
+            if self.try_wslconfig_compact(distribution).await? {
+                return Ok(WslCompactResult {
+                    method: WslCompactMethod::Wslconfig,
+                    success: true,
+                    attempts,
+                    message: "Successfully compacted using wslconfig.exe".to_string(),
+                });
+            }
+
+            // Method 3: Use diskpart directly (Home edition fallback)
+            if self.try_diskpart_compact(distribution).await? {
+                return Ok(WslCompactResult {
+                    method: WslCompactMethod::Diskpart,
+                    success: true,
+                    attempts,
+                    message: "Successfully compacted using diskpart".to_string(),
+                });
+            }
+
+            last_message = format!(
+                "Compaction attempt {}/{} failed (VHDX likely still locked)",
+                attempts, MAX_ATTEMPTS
+            );
+            warn!("{}", last_message);
+
+            if attempts < MAX_ATTEMPTS {
+                // Exponential backoff: 2s, 4s, 8s, 16s. Re-issue a shutdown to
+                // release any lingering lock before the next attempt.
+                let backoff = Duration::from_secs(2u64.saturating_mul(1u64 << (attempts - 1)));
+                tokio::time::sleep(backoff).await;
+                self.shutdown_wsl().await;
+            }
         }
 
         // Method 4: Manual instructions for user
         Ok(WslCompactResult {
             method: WslCompactMethod::Manual,
             success: false,
-            message: "Automatic compaction failed. See manual instructions.".to_string(),
+            attempts,
+            message: if last_message.is_empty() {
+                "Automatic compaction failed. See manual instructions.".to_string()
+            } else {
+                format!("{last_message}. See manual instructions.")
+            },
         })
+    }
+
+    /// Fully shut down all running WSL distributions so the backing VHDX is no
+    /// longer locked. Best-effort: failures are logged, never propagated.
+    async fn shutdown_wsl(&self) {
+        debug!("Shutting down WSL to release VHDX locks");
+        let _ = Command::new("wsl").arg("--shutdown").output().await;
+        // wslconfig is the legacy path; harmless if absent.
+        let _ = Command::new("wslconfig.exe")
+            .arg("/shutdown")
+            .output()
+            .await;
+        // Give the service manager a moment to release file handles.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    /// Best-effort check whether a VHDX file carries the sparse attribute.
+    #[cfg(windows)]
+    fn is_sparse_vhdx(path: &std::path::Path) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_SPARSE_FILE: u32 = 0x0000_0200;
+        std::fs::metadata(path)
+            .map(|m| m.file_attributes() & FILE_ATTRIBUTE_SPARSE_FILE != 0)
+            .unwrap_or(false)
+    }
+
+    /// Non-Windows stub: sparseness is not meaningful off Windows.
+    #[cfg(not(windows))]
+    fn is_sparse_vhdx(_path: &std::path::Path) -> bool {
+        false
     }
 
     /// Try to compact using wsl --manage
@@ -489,6 +564,8 @@ Note: On Windows Home edition, diskpart is the recommended method for VHDX compa
 pub struct WslCompactResult {
     pub method: WslCompactMethod,
     pub success: bool,
+    /// Number of compaction attempts made before this result.
+    pub attempts: u32,
     pub message: String,
 }
 

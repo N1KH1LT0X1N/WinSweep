@@ -137,3 +137,56 @@ async fn test_scan_error_handling() {
     // Should either error during scan setup or return empty results
     assert!(result.is_ok() || result.is_err());
 }
+
+#[tokio::test]
+async fn test_max_file_size_filter_excludes_oversized_files() {
+    // M7: an individual file larger than `max_file_size` must be excluded from
+    // results, while a smaller sibling is still reported.
+    let temp_dir = TempDir::new().unwrap();
+    std::fs::write(temp_dir.path().join("small.txt"), vec![0u8; 100]).unwrap();
+    std::fs::write(temp_dir.path().join("big.bin"), vec![0u8; 4096]).unwrap();
+
+    let mut config = create_test_config(temp_dir.path().to_path_buf());
+    config.max_file_size = Some(1024); // 1 KiB cap
+
+    let scanner = Scanner::new(config).unwrap();
+    let handle = scanner.scan().await.unwrap();
+    let results = handle.collect_all().await;
+
+    let files: Vec<_> = results
+        .iter()
+        .filter(|r| r.file_type == winsweep_common::types::FileType::File)
+        .collect();
+
+    assert_eq!(
+        files.len(),
+        1,
+        "only the small file should pass the size cap"
+    );
+    assert!(files[0].path.ends_with("small.txt"));
+}
+
+#[tokio::test]
+async fn test_items_scanned_is_reported() {
+    // M6: the scanner must surface a correct count of emitted items, not just 0.
+    let temp_dir = TempDir::new().unwrap();
+    for i in 0..5 {
+        std::fs::write(
+            temp_dir.path().join(format!("f{}.txt", i)),
+            format!("content {}", i),
+        )
+        .unwrap();
+    }
+
+    let config = create_test_config(temp_dir.path().to_path_buf());
+    let scanner = Scanner::new(config).unwrap();
+    let mut handle = scanner.scan().await.unwrap();
+
+    // Drain results, then confirm the handle reports the same count.
+    let mut count = 0u64;
+    while handle.next_result().await.is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 5);
+    assert_eq!(handle.items_scanned(), 5);
+}

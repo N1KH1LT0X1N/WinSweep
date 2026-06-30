@@ -17,11 +17,28 @@ use ratatui::{
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
-use winsweep_common::Config;
+use winsweep_common::{Config, ScanConfig};
 use winsweep_core::{
-    ContainerInfo, DockerClient, HomeEditionCompat, ImageInfo, NetworkInfo, PackageManagerRegistry,
-    VolumeInfo, WindowsEditionDetector, WslDetector, WslState, WslVersion,
+    CleanupOptions, ContainerInfo, DockerClient, HomeEditionCompat, ImageInfo, NetworkInfo,
+    PackageManagerRegistry, Scanner, ServiceManager, VolumeInfo, WindowsEditionDetector,
+    WslDetector, WslState, WslVersion,
 };
+
+/// Recursively compute the total size in bytes of a directory tree.
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            match entry.metadata() {
+                Ok(meta) if meta.is_dir() => total += dir_size(&entry_path),
+                Ok(meta) => total += meta.len(),
+                Err(_) => {}
+            }
+        }
+    }
+    total
+}
 
 /// Format bytes to human readable format
 fn format_bytes(bytes: u64) -> String {
@@ -325,8 +342,9 @@ impl App {
 
             // Check for background task messages
             if self.task_tx.is_some() {
-                // In a real implementation, we'd have a receiver here
-                // For now, we'll just update the time
+                // Long-running operations currently run synchronously via the
+                // tokio runtime inside their handlers; refresh the timestamp so
+                // the UI clock stays current.
                 self.last_update = Instant::now();
             }
 
@@ -394,6 +412,14 @@ impl App {
                         7 => Mode::About,
                         _ => Mode::Main,
                     };
+
+                    // Lazily populate data-backed pages on entry.
+                    match self.mode {
+                        Mode::Services => self.refresh_services(),
+                        Mode::PackageManagers => self.refresh_package_managers(),
+                        Mode::Docker => self.refresh_docker_resources(),
+                        _ => {}
+                    }
                 }
             }
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -571,6 +597,9 @@ impl App {
             KeyCode::Char('s') => {
                 self.toggle_service();
             }
+            KeyCode::Char('r') => {
+                self.refresh_services();
+            }
             _ => {}
         }
     }
@@ -657,28 +686,101 @@ impl App {
         self.ui_state.progress.active = true;
         self.ui_state.progress.message = "Scanning...".to_string();
 
-        // In a real implementation, this would spawn a background task
-        info!(
-            "Starting scan with {} paths",
-            self.ui_state.scan.paths.len()
+        let paths: Vec<std::path::PathBuf> = if self.ui_state.scan.paths.is_empty() {
+            vec![std::path::PathBuf::from(".")]
+        } else {
+            self.ui_state
+                .scan
+                .paths
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect()
+        };
+
+        info!("Starting scan with {} paths", paths.len());
+
+        let config = ScanConfig {
+            paths,
+            min_age_days: self.ui_state.scan.min_age_days,
+            ..ScanConfig::default()
+        };
+
+        let results = self.runtime.block_on(async {
+            match Scanner::new(config) {
+                Ok(scanner) => match scanner.scan().await {
+                    Ok(handle) => handle.collect_all().await,
+                    Err(e) => {
+                        tracing::error!("Scan failed: {}", e);
+                        Vec::new()
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Failed to create scanner: {}", e);
+                    Vec::new()
+                }
+            }
+        });
+
+        let total: u64 = results.iter().map(|r| r.size_bytes).sum();
+        self.ui_state.scan.scan_results = results
+            .iter()
+            .map(|r| format!("{} ({})", r.path.display(), format_bytes(r.size_bytes)))
+            .collect();
+        self.ui_state.scan.scanning = false;
+        self.ui_state.progress.active = false;
+        self.ui_state.progress.message = format!(
+            "Found {} items totaling {}",
+            results.len(),
+            format_bytes(total)
         );
     }
 
     /// Compact WSL distribution
     fn compact_wsl_distribution(&mut self) {
-        if let Some(dist) = self
+        let dist = match self
             .ui_state
             .wsl
             .distributions
             .get(self.ui_state.wsl.selected_dist)
         {
-            self.ui_state.wsl.compacting = true;
-            self.ui_state.wsl.status_message = format!("Compacting {}...", dist);
-            self.ui_state.progress.active = true;
-            self.ui_state.progress.message = format!("Compacting WSL: {}", dist);
+            Some(d) => d.clone(),
+            None => return,
+        };
 
-            info!("Compacting WSL distribution: {}", dist);
+        self.ui_state.wsl.compacting = true;
+        self.ui_state.wsl.status_message = format!("Compacting {}...", dist);
+        self.ui_state.progress.active = true;
+        self.ui_state.progress.message = format!("Compacting WSL: {}", dist);
+        info!("Compacting WSL distribution: {}", dist);
+
+        if self.dry_run {
+            self.ui_state.wsl.status_message = format!("[dry-run] Would compact {}", dist);
+            self.ui_state.wsl.compacting = false;
+            self.ui_state.progress.active = false;
+            return;
         }
+
+        let compat = match HomeEditionCompat::new() {
+            Ok(c) => c,
+            Err(e) => {
+                self.ui_state.wsl.status_message = format!("Failed to initialize: {}", e);
+                self.ui_state.wsl.compacting = false;
+                self.ui_state.progress.active = false;
+                return;
+            }
+        };
+
+        match self.runtime.block_on(compat.compact_wsl_vhdx(&dist)) {
+            Ok(r) => {
+                self.ui_state.wsl.status_message =
+                    format!("{} ({:?}, {} attempt(s))", r.message, r.method, r.attempts);
+            }
+            Err(e) => {
+                self.ui_state.wsl.status_message = format!("Compaction error: {}", e);
+            }
+        }
+        self.ui_state.wsl.compacting = false;
+        self.ui_state.progress.active = false;
     }
 
     /// Cleanup Docker resources
@@ -686,8 +788,44 @@ impl App {
         self.ui_state.docker.cleaning = true;
         self.ui_state.progress.active = true;
         self.ui_state.progress.message = "Cleaning Docker...".to_string();
-
         info!("Starting Docker cleanup");
+
+        if self.docker_client.is_none() {
+            self.docker_client = self
+                .runtime
+                .block_on(async { DockerClient::new().await.ok() });
+        }
+
+        if self.dry_run {
+            self.ui_state.docker.status_message = "[dry-run] Docker cleanup skipped".to_string();
+            self.ui_state.docker.cleaning = false;
+            self.ui_state.progress.active = false;
+            return;
+        }
+
+        if let Some(ref client) = self.docker_client {
+            let options = CleanupOptions::default();
+            match self.runtime.block_on(client.cleanup_all(&options)) {
+                Ok(r) => {
+                    self.ui_state.docker.space_freed = r.space_freed;
+                    self.ui_state.docker.status_message = format!(
+                        "Removed {} containers, {} images, {} networks; freed {}",
+                        r.containers_removed,
+                        r.images_removed,
+                        r.networks_removed,
+                        format_bytes(r.space_freed)
+                    );
+                }
+                Err(e) => {
+                    self.ui_state.docker.status_message = format!("Docker cleanup failed: {}", e);
+                }
+            }
+        } else {
+            self.ui_state.docker.status_message = "Docker not available".to_string();
+        }
+        self.ui_state.docker.cleaning = false;
+        self.ui_state.progress.active = false;
+        self.refresh_docker_resources();
     }
 
     /// Cleanup Windows Update
@@ -697,20 +835,118 @@ impl App {
             "Cleaning Windows Update cache...".to_string();
         self.ui_state.progress.active = true;
         self.ui_state.progress.message = "Cleaning Windows Update...".to_string();
-
         info!("Starting Windows Update cleanup");
+
+        let download_path = std::path::PathBuf::from(r"C:\Windows\SoftwareDistribution\Download");
+        let reclaimable = dir_size(&download_path);
+
+        if self.dry_run {
+            self.ui_state.windows_update.status_message =
+                format!("[dry-run] Would free {}", format_bytes(reclaimable));
+            self.ui_state.windows_update.cleaning = false;
+            self.ui_state.progress.active = false;
+            return;
+        }
+
+        // Stop the Windows Update service so cached files are unlocked.
+        let service_mgr = ServiceManager::new();
+        if let Ok(ref mgr) = service_mgr {
+            let _ = mgr.stop_service("wuauserv");
+        }
+
+        let mut freed = 0u64;
+        if let Ok(entries) = std::fs::read_dir(&download_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_dir = path.is_dir();
+                let size = if is_dir {
+                    dir_size(&path)
+                } else {
+                    entry.metadata().map(|m| m.len()).unwrap_or(0)
+                };
+                let removed = if is_dir {
+                    std::fs::remove_dir_all(&path).is_ok()
+                } else {
+                    std::fs::remove_file(&path).is_ok()
+                };
+                if removed {
+                    freed += size;
+                }
+            }
+        }
+
+        // Restart the service so updates keep working.
+        if let Ok(ref mgr) = service_mgr {
+            let _ = mgr.start_service("wuauserv");
+        }
+
+        self.ui_state.windows_update.space_freed = freed;
+        self.ui_state.windows_update.status_message = format!("Freed {}", format_bytes(freed));
+        self.ui_state.windows_update.cleaning = false;
+        self.ui_state.progress.active = false;
+    }
+
+    /// Refresh the list of cleanup-safe services
+    fn refresh_services(&mut self) {
+        let mgr = match ServiceManager::new() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("Failed to open service manager: {}", e);
+                return;
+            }
+        };
+
+        let mut list = Vec::new();
+        for name in mgr.get_cleanup_safe_services() {
+            if let Ok(info) = mgr.get_service(name) {
+                list.push(ServiceInfo {
+                    name: info.name,
+                    display_name: info.display_name,
+                    status: ServiceManager::state_to_string(info.status.current_state).to_string(),
+                    can_stop: info.can_stop,
+                });
+            }
+        }
+        if self.ui_state.services.selected_service >= list.len() {
+            self.ui_state.services.selected_service = 0;
+        }
+        self.ui_state.services.services = list;
     }
 
     /// Toggle service state
     fn toggle_service(&mut self) {
-        if let Some(service) = self
+        let (name, status) = match self
             .ui_state
             .services
             .services
             .get(self.ui_state.services.selected_service)
         {
-            info!("Toggling service: {}", service.name);
-            // Implementation would toggle the service
+            Some(s) => (s.name.clone(), s.status.clone()),
+            None => return,
+        };
+        info!("Toggling service: {}", name);
+
+        if self.dry_run {
+            return;
+        }
+
+        let mgr = match ServiceManager::new() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("Failed to open service manager: {}", e);
+                return;
+            }
+        };
+
+        let result = if status == "Running" {
+            mgr.stop_service(&name)
+        } else {
+            mgr.start_service(&name)
+        };
+
+        match result {
+            Ok(_) => self.refresh_services(),
+            Err(e) => tracing::error!("Failed to toggle service {}: {}", name, e),
         }
     }
 
@@ -718,50 +954,100 @@ impl App {
     fn save_config(&mut self) {
         self.ui_state.config.editing = false;
         info!("Saving configuration");
-        // Implementation would save the config
+        match self.config.save() {
+            Ok(_) => info!("Configuration saved successfully"),
+            Err(e) => tracing::error!("Failed to save configuration: {}", e),
+        }
     }
 
     /// Refresh package managers list
     fn refresh_package_managers(&mut self) {
         info!("Refreshing package managers");
 
-        // Clear current list
         self.ui_state.package_managers.managers.clear();
 
-        // Create registry and detect package managers
-        let registry = self.runtime.block_on(PackageManagerRegistry::new());
+        let managers = self.runtime.block_on(async {
+            let registry = PackageManagerRegistry::new().await;
+            let mut infos = Vec::new();
+            for manager in registry.get_managers() {
+                let installed = manager.is_installed().await;
+                let version = if installed {
+                    manager.get_version().await.unwrap_or(None)
+                } else {
+                    None
+                };
+                let cache_size = if installed {
+                    manager.calculate_cache_size().await.unwrap_or(0)
+                } else {
+                    0
+                };
+                infos.push(PackageManagerInfo {
+                    name: manager.name().to_string(),
+                    display_name: manager.display_name().to_string(),
+                    version,
+                    cache_size,
+                    installed,
+                });
+            }
+            infos
+        });
 
-        // Add all package managers with their status
-        for manager in registry.get_managers() {
-            let info = PackageManagerInfo {
-                name: manager.name().to_string(),
-                display_name: manager.display_name().to_string(),
-                version: None,    // Would get version asynchronously
-                cache_size: 0,    // Would calculate size asynchronously
-                installed: false, // Would check installation asynchronously
-            };
-            self.ui_state.package_managers.managers.push(info);
-        }
-
+        self.ui_state.package_managers.managers = managers;
         self.ui_state.package_managers.status_message = "Refreshed package managers".to_string();
     }
 
     /// Clean selected package manager
     fn clean_selected_package_manager(&mut self) {
-        if let Some(manager) = self
+        let (name, installed) = match self
             .ui_state
             .package_managers
             .managers
             .get(self.ui_state.package_managers.selected_manager)
         {
-            if manager.installed {
-                info!("Cleaning {} cache", manager.name);
-                self.ui_state.package_managers.cleaning = true;
+            Some(m) => (m.name.clone(), m.installed),
+            None => return,
+        };
+
+        if !installed {
+            return;
+        }
+
+        info!("Cleaning {} cache", name);
+        self.ui_state.package_managers.cleaning = true;
+        self.ui_state.package_managers.status_message = format!("Cleaning {}...", name);
+
+        if self.dry_run {
+            self.ui_state.package_managers.status_message =
+                format!("[dry-run] Would clean {}", name);
+            self.ui_state.package_managers.cleaning = false;
+            return;
+        }
+
+        let result = self.runtime.block_on(async {
+            let registry = PackageManagerRegistry::new().await;
+            match registry.get_by_name(&name) {
+                Some(m) => Some(m.clean_all_caches().await),
+                None => None,
+            }
+        });
+
+        match result {
+            Some(Ok(r)) => {
+                self.ui_state.package_managers.total_space_freed += r.space_freed;
                 self.ui_state.package_managers.status_message =
-                    format!("Cleaning {}...", manager.display_name);
-                // Implementation would clean the cache
+                    format!("Cleaned {}: freed {}", name, format_bytes(r.space_freed));
+            }
+            Some(Err(e)) => {
+                self.ui_state.package_managers.status_message =
+                    format!("Failed to clean {}: {}", name, e);
+            }
+            None => {
+                self.ui_state.package_managers.status_message =
+                    format!("Package manager {} not found", name);
             }
         }
+        self.ui_state.package_managers.cleaning = false;
+        self.refresh_package_managers();
     }
 
     /// Clean all package managers
@@ -770,21 +1056,71 @@ impl App {
         self.ui_state.package_managers.cleaning = true;
         self.ui_state.package_managers.status_message =
             "Cleaning all package managers...".to_string();
-        // Implementation would clean all caches
+
+        if self.dry_run {
+            self.ui_state.package_managers.status_message =
+                "[dry-run] Would clean all package managers".to_string();
+            self.ui_state.package_managers.cleaning = false;
+            return;
+        }
+
+        let results = self.runtime.block_on(async {
+            let registry = PackageManagerRegistry::new().await;
+            registry.clean_all().await
+        });
+
+        match results {
+            Ok(results) => {
+                let freed: u64 = results.iter().map(|r| r.space_freed).sum();
+                self.ui_state.package_managers.total_space_freed += freed;
+                self.ui_state.package_managers.status_message = format!(
+                    "Cleaned {} managers; freed {}",
+                    results.len(),
+                    format_bytes(freed)
+                );
+            }
+            Err(e) => {
+                self.ui_state.package_managers.status_message =
+                    format!("Failed to clean package managers: {}", e);
+            }
+        }
+        self.ui_state.package_managers.cleaning = false;
+        self.refresh_package_managers();
     }
 
     /// Show package manager info
     fn show_package_manager_info(&mut self) {
-        if let Some(manager) = self
+        let name = match self
             .ui_state
             .package_managers
             .managers
             .get(self.ui_state.package_managers.selected_manager)
         {
-            info!("Showing info for {}", manager.name);
+            Some(m) => m.name.clone(),
+            None => return,
+        };
+
+        info!("Showing info for {}", name);
+
+        let info = self.runtime.block_on(async {
+            let registry = PackageManagerRegistry::new().await;
+            match registry.get_by_name(&name) {
+                Some(m) => m.get_cache_info().await.unwrap_or_default(),
+                None => Vec::new(),
+            }
+        });
+
+        if info.is_empty() {
             self.ui_state.package_managers.status_message =
-                format!("Viewing {} cache details", manager.display_name);
-            // Implementation would show detailed cache info
+                format!("{}: no cache information available", name);
+        } else {
+            let total: u64 = info.iter().map(|c| c.size_bytes).sum();
+            self.ui_state.package_managers.status_message = format!(
+                "{}: {} cache location(s), {}",
+                name,
+                info.len(),
+                format_bytes(total)
+            );
         }
     }
 

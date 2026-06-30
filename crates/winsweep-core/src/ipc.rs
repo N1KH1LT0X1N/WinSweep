@@ -30,19 +30,30 @@ use winsweep_common::types::IpcMessage;
 /// Named pipe name for WinSweep IPC
 const PIPE_NAME: &str = r"\\.\pipe\WinSweepIPC";
 
-/// SDDL string allowing Authenticated Users full access
-const PIPE_SDDL: &str = "D:(A;;GA;;;AU)"; // DACL: Allow Generic All to Authenticated Users
+/// SDDL for the elevated IPC pipe DACL.
+///
+/// Least-privilege: grant GENERIC_ALL only to LocalSystem (`SY`), the local
+/// Administrators group (`BA`), and the creating/owner principal (`OW`). The
+/// previous value (`D:(A;;GA;;;AU)`) granted full access to *all* Authenticated
+/// Users, needlessly widening the attack surface on this cross-privilege channel.
+const PIPE_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)";
 
 /// IPC server for elevated scanner process
 pub struct IpcServer {
     server: Arc<Mutex<NamedPipeServer>>,
     message_sender: mpsc::UnboundedSender<IpcMessage>,
     message_receiver: Arc<Mutex<mpsc::UnboundedReceiver<IpcMessage>>>,
+    /// Sender side of the channel for incoming (client → server) messages.
+    incoming_tx: mpsc::UnboundedSender<IpcMessage>,
+    /// Receiver side exposed to callers via [`IpcServer::incoming_receiver`].
+    incoming_rx: Arc<Mutex<mpsc::UnboundedReceiver<IpcMessage>>>,
 }
 
 /// IPC client for GUI process
 pub struct IpcClient {
     client: Arc<Mutex<Option<NamedPipeClient>>>,
+    /// Outgoing message queue sender (used by `start_message_loop`).
+    outgoing_tx: mpsc::UnboundedSender<IpcMessage>,
     message_receiver: Arc<Mutex<mpsc::UnboundedReceiver<IpcMessage>>>,
 }
 
@@ -68,13 +79,26 @@ impl IpcServer {
         let (tx, rx) = mpsc::unbounded_channel();
         let receiver = Arc::new(Mutex::new(rx));
 
+        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+        let incoming_rx = Arc::new(Mutex::new(incoming_rx));
+
         let server = Arc::new(Mutex::new(server));
 
         Ok(Self {
             server,
             message_sender: tx,
             message_receiver: receiver,
+            incoming_tx,
+            incoming_rx,
         })
+    }
+
+    /// Borrow the receiver for incoming messages (client → server).
+    ///
+    /// Callers should poll this channel to react to `StartScan`, `CleanupItems`,
+    /// and other application-level messages forwarded by the server loop.
+    pub fn incoming_receiver(&self) -> Arc<Mutex<mpsc::UnboundedReceiver<IpcMessage>>> {
+        self.incoming_rx.clone()
     }
 
     /// Start accepting connections and processing messages
@@ -126,7 +150,8 @@ impl IpcServer {
                 std::mem::discriminant(&message)
             );
 
-            // Handle ping/pong automatically
+            // Handle ping/pong automatically; forward everything else to the
+            // application-level incoming channel so callers can act on it.
             match message {
                 IpcMessage::Ping => {
                     let mut server = self.server.lock().await;
@@ -134,9 +159,10 @@ impl IpcServer {
                         error!("Failed to send Pong: {}", e);
                     }
                 }
-                _ => {
-                    // Forward to application handler
-                    // In a real implementation, you'd have a callback channel
+                other => {
+                    if let Err(e) = self.incoming_tx.send(other) {
+                        warn!("Failed to forward incoming IPC message: {}", e);
+                    }
                 }
             }
         }
@@ -162,9 +188,9 @@ impl IpcClient {
         let (tx, rx) = mpsc::unbounded_channel();
         let receiver = Arc::new(Mutex::new(rx));
 
-        let _ = tx; // channel end kept alive by receiver
         Ok(Self {
             client: Arc::new(Mutex::new(None)),
+            outgoing_tx: tx,
             message_receiver: receiver,
         })
     }
@@ -185,15 +211,15 @@ impl IpcClient {
         Ok(())
     }
 
-    /// Send a message to the server
+    /// Send a message to the server.
+    ///
+    /// The message is queued on the outgoing channel and sent by the background
+    /// writer task started by [`Self::connect`].
     pub async fn send(&self, message: IpcMessage) -> Result<()> {
-        let mut client_guard = self.client.lock().await;
-
-        if let Some(ref mut client) = *client_guard {
-            send_message(client, &message).await
-        } else {
-            Err(anyhow::anyhow!("Not connected to IPC server"))
-        }
+        self.outgoing_tx
+            .send(message)
+            .context("Failed to queue outgoing IPC message")?;
+        Ok(())
     }
 
     /// Receive a message from the server

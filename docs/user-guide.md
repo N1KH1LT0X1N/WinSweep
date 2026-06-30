@@ -24,7 +24,7 @@
 ### From Release (Recommended)
 
 1. Download the latest `winsweep-<version>-setup.exe` from
-   [GitHub Releases](https://github.com/winsweep/winsweep/releases).
+   [GitHub Releases](https://github.com/N1KH1LT0X1N/WinSweep/releases).
 2. Run the installer. It will place `winsweep-gui.exe` and `winsweep-cli.exe`
    in `%ProgramFiles%\WinSweep` and create Start Menu shortcuts.
 3. Launch **WinSweep** from the Start Menu.
@@ -37,7 +37,7 @@ directly — no installation required.
 ### From Source
 
 ```powershell
-git clone https://github.com/winsweep/winsweep.git
+git clone https://github.com/N1KH1LT0X1N/WinSweep.git
 cd winsweep
 cargo build --release -p winsweep-gui
 cargo build --release -p winsweep-cli

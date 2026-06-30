@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Live CLI backends** — every CLI page now performs real work instead of UI-only
+  stubs: directory scanning (`Scanner`), WSL VHDX compaction, Docker cleanup,
+  Windows Update cache cleanup, service start/stop, configuration persistence, and
+  package-manager refresh/clean/info. The `--dry-run` flag is honored across all
+  destructive handlers.
+- **Service start-type & deletion APIs** — `ServiceManager::query_start_type`
+  (via `QueryServiceConfigW`), `delete_service` (via `DeleteService`, guarded against
+  critical services), and `re_enable_service`. `ServiceInfo::start_type` and
+  `can_delete` are now populated accurately.
+- **Executable version detection** — `ToolDetector` reads four-part file versions
+  from the Win32 `VS_FIXEDFILEINFO` resource and parses the NuGet banner for its
+  version.
+- **WSL compaction resilience** — up to 5 compaction attempts with exponential
+  backoff (2s·2ⁿ), a full `wsl --shutdown` between attempts to release VHDX locks,
+  sparse-VHDX detection, and an `attempts` count on `WslCompactResult`.
+
+### Changed
+
+- `CleanupManager::cleanup` now accepts the originating `scan_id` so the returned
+  `CleanupResult` is correlated with its scan instead of generating a new id.
+- Hardened the cross-privilege IPC named-pipe DACL to least privilege
+  (`SYSTEM`, `Administrators`, and the pipe owner) instead of all authenticated users.
+
+### Fixed
+
+- Closed leaked Windows file handles in `windows_api::get_final_path_name` and the
+  junction detector by introducing a scoped-handle RAII guard.
+- Added bounds checking to reparse-point parsing before pointer arithmetic.
+- Removed an errant `cargo clean` that ran in the current working directory during
+  Cargo cache cleanup.
+- The scanner now reports an accurate `items_scanned` count, applies the
+  `max_file_size` filter, and offloads synchronous directory-size walks to a
+  blocking thread pool.
+- **Docker "Prune System"** now prunes all four resource types (containers, images,
+  volumes, networks) in a single background task. Previously, the `is_operation_running`
+  guard caused only containers to be pruned while images, volumes, and networks were
+  silently skipped.
+- Installer `winsweep.nsi` corrected stale `PRODUCT_WEB_SITE` URL to
+  `https://github.com/N1KH1LT0X1N/WinSweep`.
+- `scripts/sign-build.ps1` removed erroneous `/f $CertificateThumbprint` signtool
+  argument (expects a PFX file path, not a thumbprint); certificate selection now
+  relies solely on `/sha1`.
+- GitHub Actions workflows: replaced non-existent action versions (`checkout@v6` →
+  `@v4`, `upload-artifact@v7` → `@v4`, `action-gh-release@v3` → `@v2`); added
+  missing MinGW installation step to `release.yml` and the `docs` job so the
+  `x86_64-pc-windows-gnu` default target can link correctly.
+
+### Tests
+
+- Workspace test suite expanded to **157 passing tests** (1 ignored), covering the
+  new service start-type parsing, executable version detection, NuGet banner
+  parsing, `items_scanned` reporting, and the `max_file_size` filter.
+
 ## [1.0.0] - 2026-01-15
 
 ### Added

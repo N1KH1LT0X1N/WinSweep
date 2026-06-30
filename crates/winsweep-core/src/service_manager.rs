@@ -10,12 +10,13 @@ use tracing::{debug, error, info, warn};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Security::SC_HANDLE;
 use windows::Win32::System::Services::{
-    ChangeServiceConfigW, CloseServiceHandle, ControlService, EnumServicesStatusExW,
-    OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, StartServiceW, SC_ENUM_PROCESS_INFO,
-    SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE, SC_STATUS_PROCESS_INFO,
-    SERVICE_CHANGE_CONFIG, SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS, SERVICE_START,
-    SERVICE_STATE_ALL, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STATUS_PROCESS,
-    SERVICE_STOP, SERVICE_WIN32_OWN_PROCESS, SERVICE_WIN32_SHARE_PROCESS,
+    ChangeServiceConfigW, CloseServiceHandle, ControlService, DeleteService, EnumServicesStatusExW,
+    OpenSCManagerW, OpenServiceW, QueryServiceConfigW, QueryServiceStatusEx, StartServiceW,
+    QUERY_SERVICE_CONFIGW, SC_ENUM_PROCESS_INFO, SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE,
+    SC_STATUS_PROCESS_INFO, SERVICE_CHANGE_CONFIG, SERVICE_CONTROL_STOP, SERVICE_QUERY_CONFIG,
+    SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATE_ALL, SERVICE_STATUS,
+    SERVICE_STATUS_CURRENT_STATE, SERVICE_STATUS_PROCESS, SERVICE_STOP, SERVICE_WIN32_OWN_PROCESS,
+    SERVICE_WIN32_SHARE_PROCESS,
 };
 
 /// Service manager for Windows services
@@ -72,6 +73,20 @@ pub enum ServiceStartType {
     Manual,
     Disabled,
     Unknown,
+}
+
+impl ServiceStartType {
+    /// Map a raw Win32 `SERVICE_START_TYPE` value to this enum.
+    fn from_raw(value: u32) -> Self {
+        match value {
+            0 => ServiceStartType::Boot,      // SERVICE_BOOT_START
+            1 => ServiceStartType::System,    // SERVICE_SYSTEM_START
+            2 => ServiceStartType::Automatic, // SERVICE_AUTO_START
+            3 => ServiceStartType::Manual,    // SERVICE_DEMAND_START
+            4 => ServiceStartType::Disabled,  // SERVICE_DISABLED
+            _ => ServiceStartType::Unknown,
+        }
+    }
 }
 
 impl ServiceManager {
@@ -332,13 +347,13 @@ impl ServiceManager {
             service_flags: (*entry).ServiceStatusProcess.dwServiceFlags.0,
         };
 
-        // Determine start type (would need additional query)
-        let start_type = ServiceStartType::Unknown;
+        // Determine start type via a dedicated config query.
+        let start_type = self.query_start_type(&name);
 
         // Determine capabilities
         let can_stop = status.controls_accepted & SERVICE_ACCEPT_STOP != 0;
         let can_start = true; // Simplified
-        let can_delete = false; // Would need additional check
+        let can_delete = self.is_safe_to_disable(&name);
 
         Ok(ServiceInfo {
             name,
@@ -395,10 +410,10 @@ impl ServiceManager {
             name: service_name.to_string(),
             display_name: service_name.to_string(), // Simplified
             status,
-            start_type: ServiceStartType::Unknown,
+            start_type: self.query_start_type(service_name),
             can_stop,
             can_start: true,
-            can_delete: false,
+            can_delete: self.is_safe_to_disable(service_name),
         })
     }
 }
@@ -432,6 +447,8 @@ impl From<SERVICE_STATUS_CURRENT_STATE> for ServiceState {
 
 // Windows API constants
 const SERVICE_ACCEPT_STOP: u32 = 0x00000001;
+/// Standard `DELETE` access right (winnt.h) — required by `DeleteService`.
+const DELETE_ACCESS: u32 = 0x0001_0000;
 
 // Windows API structures
 #[repr(C)]
@@ -670,6 +687,96 @@ impl ServiceManager {
         }
     }
 
+    /// Query the configured start type of a service via `QueryServiceConfigW`.
+    ///
+    /// Returns [`ServiceStartType::Unknown`] when the service cannot be opened
+    /// (e.g. insufficient privileges) or the query fails.
+    pub fn query_start_type(&self, service_name: &str) -> ServiceStartType {
+        let service_name_wide = to_wide(service_name);
+
+        let handle = match unsafe {
+            OpenServiceW(
+                self.sc_manager,
+                PCWSTR(service_name_wide.as_ptr()),
+                SERVICE_QUERY_CONFIG,
+            )
+        } {
+            Ok(h) => h,
+            Err(_) => return ServiceStartType::Unknown,
+        };
+
+        // First call determines the required buffer size.
+        let mut bytes_needed: u32 = 0;
+        let _ = unsafe { QueryServiceConfigW(handle, None, 0, &mut bytes_needed) };
+        if bytes_needed == 0 {
+            let _ = unsafe { CloseServiceHandle(handle) };
+            return ServiceStartType::Unknown;
+        }
+
+        let mut buffer = vec![0u8; bytes_needed as usize];
+        let cfg_ptr = buffer.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW;
+        let result =
+            unsafe { QueryServiceConfigW(handle, Some(cfg_ptr), bytes_needed, &mut bytes_needed) };
+
+        let start_type = if result.is_ok() {
+            let raw = unsafe { (*cfg_ptr).dwStartType.0 };
+            ServiceStartType::from_raw(raw)
+        } else {
+            ServiceStartType::Unknown
+        };
+
+        let _ = unsafe { CloseServiceHandle(handle) };
+        start_type
+    }
+
+    /// Permanently delete a service from the Service Control Manager database.
+    ///
+    /// Refuses to act on services classified as critical by
+    /// [`Self::is_safe_to_disable`]. The deletion takes effect once all open
+    /// handles to the service are closed.
+    pub fn delete_service(&self, service_name: &str) -> Result<()> {
+        if !self.is_safe_to_disable(service_name) {
+            return Err(anyhow::anyhow!(
+                "Refusing to delete critical service '{}'",
+                service_name
+            ));
+        }
+
+        info!("Deleting service {}", service_name);
+        let service_name_wide = to_wide(service_name);
+
+        let handle = unsafe {
+            OpenServiceW(
+                self.sc_manager,
+                PCWSTR(service_name_wide.as_ptr()),
+                DELETE_ACCESS,
+            )
+        }
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to open service '{}' for delete: {}",
+                service_name,
+                e
+            )
+        })?;
+
+        let result = unsafe { DeleteService(handle) };
+        let _ = unsafe { CloseServiceHandle(handle) };
+
+        result
+            .map_err(|e| anyhow::anyhow!("Failed to delete service '{}': {}", service_name, e))?;
+        Ok(())
+    }
+
+    /// Re-enable a previously disabled service by restoring automatic start.
+    ///
+    /// For finer-grained control over the resulting start type, call
+    /// [`Self::change_service_start_type`] directly.
+    pub fn re_enable_service(&self, service_name: &str) -> Result<()> {
+        info!("Re-enabling service {}", service_name);
+        self.change_service_start_type(service_name, ServiceStartType::Automatic)
+    }
+
     /// Get start type as string
     pub fn start_type_to_string(start_type: ServiceStartType) -> &'static str {
         match start_type {
@@ -720,5 +827,15 @@ mod tests {
         assert_eq!(ServiceState::from(1), ServiceState::Stopped);
         assert_eq!(ServiceState::from(4), ServiceState::Running);
         assert_eq!(ServiceState::from(99), ServiceState::Unknown);
+    }
+
+    #[test]
+    fn test_start_type_from_raw() {
+        assert_eq!(ServiceStartType::from_raw(0), ServiceStartType::Boot);
+        assert_eq!(ServiceStartType::from_raw(1), ServiceStartType::System);
+        assert_eq!(ServiceStartType::from_raw(2), ServiceStartType::Automatic);
+        assert_eq!(ServiceStartType::from_raw(3), ServiceStartType::Manual);
+        assert_eq!(ServiceStartType::from_raw(4), ServiceStartType::Disabled);
+        assert_eq!(ServiceStartType::from_raw(99), ServiceStartType::Unknown);
     }
 }

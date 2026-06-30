@@ -41,8 +41,12 @@ impl CleanupManager {
         }
     }
 
-    /// Clean up the specified items
-    pub async fn cleanup(&self, items: Vec<ScanResult>) -> Result<CleanupResult> {
+    /// Clean up the specified items.
+    ///
+    /// `scan_id` is the identifier of the scan that produced `items`; it is echoed
+    /// back in the returned [`CleanupResult`] so the cleanup can be correlated with
+    /// the scan it acted on.
+    pub async fn cleanup(&self, scan_id: Uuid, items: Vec<ScanResult>) -> Result<CleanupResult> {
         let cleanup_id = Uuid::new_v4();
         let start_time = std::time::Instant::now();
 
@@ -114,7 +118,7 @@ impl CleanupManager {
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         let result = CleanupResult {
-            scan_id: Uuid::new_v4(), // Will be set by caller
+            scan_id,
             items_deleted,
             items_failed,
             space_freed_bytes: space_freed,
@@ -293,8 +297,10 @@ mod tests {
             deletion_reason: None,
         };
 
-        let result = manager.cleanup(vec![scan_result]).await.unwrap();
+        let scan_id = Uuid::new_v4();
+        let result = manager.cleanup(scan_id, vec![scan_result]).await.unwrap();
 
+        assert_eq!(result.scan_id, scan_id);
         assert_eq!(result.items_deleted.len(), 1);
         assert_eq!(result.items_deleted[0], file_path);
         assert!(!file_path.exists());
@@ -325,8 +331,10 @@ mod tests {
             deletion_reason: Some("In NEVER_DELETE list".to_string()),
         };
 
-        let result = manager.cleanup(vec![scan_result]).await.unwrap();
+        let scan_id = Uuid::new_v4();
+        let result = manager.cleanup(scan_id, vec![scan_result]).await.unwrap();
 
+        assert_eq!(result.scan_id, scan_id);
         assert_eq!(result.items_deleted.len(), 0);
         assert_eq!(result.items_failed.len(), 1);
         assert!(file_path.exists());

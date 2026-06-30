@@ -178,13 +178,15 @@ async fn test_cleanup_operations() {
         deletion_reason: None,
     };
 
-    let result = cleanup.cleanup(vec![scan_result]).await.unwrap();
+    let scan_id = uuid::Uuid::new_v4();
+    let result = cleanup.cleanup(scan_id, vec![scan_result]).await.unwrap();
 
     assert!(!file_to_delete.exists(), "deleted file should be gone");
     assert!(
         test_path.join("keep_me.txt").exists(),
         "kept file should remain"
     );
+    assert_eq!(result.scan_id, scan_id);
     assert_eq!(result.items_deleted.len(), 1);
     assert!(result.items_failed.is_empty());
 }

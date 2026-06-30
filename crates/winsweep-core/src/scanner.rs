@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
@@ -78,6 +79,7 @@ pub struct Scanner {
 pub struct ScannerHandle {
     pub scan_id: Uuid,
     receiver: mpsc::UnboundedReceiver<ScanResult>,
+    items_scanned: Arc<AtomicU64>,
     _join_handle: tokio::task::JoinHandle<Result<()>>,
 }
 
@@ -105,9 +107,13 @@ impl Scanner {
         let windows_api = self.windows_api.clone();
         let junction_detector = self.junction_detector.clone();
 
+        // Shared counter of items actually emitted, readable via `ScannerHandle`.
+        let items_scanned = Arc::new(AtomicU64::new(0));
+        let items_scanned_task = items_scanned.clone();
+
         let join_handle = tokio::spawn(async move {
             let start_time = Instant::now();
-            let mut items_scanned = 0u64;
+            let items_scanned = items_scanned_task;
 
             // Determine parallelism
             let parallelism = config.parallel_jobs.unwrap_or_else(|| {
@@ -127,13 +133,16 @@ impl Scanner {
                 } else {
                     // Single file
                     if let Ok(result) = scan_file(path, &windows_api, &junction_detector).await {
-                        let _ = sender.send(result);
-                        items_scanned += 1;
+                        if !exceeds_max_size(&config, &result) {
+                            let _ = sender.send(result);
+                            items_scanned.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
 
             // Process directories in parallel
+            let items_scanned_stream = items_scanned.clone();
             let dir_stream = stream::iter(directories)
                 .map(move |dir| {
                     let semaphore = semaphore.clone();
@@ -141,6 +150,7 @@ impl Scanner {
                     let config = config.clone();
                     let windows_api = windows_api.clone();
                     let junction_detector = junction_detector.clone();
+                    let items_scanned = items_scanned_stream.clone();
 
                     async move {
                         let _permit = semaphore.acquire().await?;
@@ -150,6 +160,7 @@ impl Scanner {
                             &windows_api,
                             &junction_detector,
                             &sender,
+                            &items_scanned,
                         )
                         .await
                     }
@@ -169,7 +180,9 @@ impl Scanner {
             let duration = start_time.elapsed();
             info!(
                 "Scan {} completed in {:?}, scanned {} items",
-                scan_id, duration, items_scanned
+                scan_id,
+                duration,
+                items_scanned.load(Ordering::Relaxed)
             );
 
             Ok(())
@@ -178,6 +191,7 @@ impl Scanner {
         Ok(ScannerHandle {
             scan_id,
             receiver,
+            items_scanned,
             _join_handle: join_handle,
         })
     }
@@ -197,6 +211,11 @@ impl ScannerHandle {
     /// Check whether the background scan task has finished
     pub fn is_finished(&self) -> bool {
         self._join_handle.is_finished()
+    }
+
+    /// Total number of items emitted by the scan so far.
+    pub fn items_scanned(&self) -> u64 {
+        self.items_scanned.load(Ordering::Relaxed)
     }
 
     /// Get all remaining scan results
@@ -225,6 +244,7 @@ async fn scan_directory_recursive(
     _windows_api: &WindowsApi,
     junction_detector: &JunctionDetector,
     sender: &mpsc::UnboundedSender<ScanResult>,
+    items_scanned: &Arc<AtomicU64>,
 ) -> Result<()> {
     debug!("Scanning directory: {}", dir.display());
 
@@ -262,6 +282,7 @@ async fn scan_directory_recursive(
             // Always scan junctions as they're local
             if let Ok(result) = scan_file(&path, _windows_api, junction_detector).await {
                 let _ = sender.send(result);
+                items_scanned.fetch_add(1, Ordering::Relaxed);
             }
 
             continue;
@@ -273,6 +294,7 @@ async fn scan_directory_recursive(
                 try_scan_artifact_dir(&path, dir, config, junction_detector).await
             {
                 let _ = sender.send(artifact_result);
+                items_scanned.fetch_add(1, Ordering::Relaxed);
                 // Do NOT recurse — we already aggregated the whole subtree
             } else {
                 subdirs.push(path);
@@ -280,7 +302,10 @@ async fn scan_directory_recursive(
         } else {
             // Scan regular file
             if let Ok(result) = scan_file(&path, _windows_api, junction_detector).await {
-                let _ = sender.send(result);
+                if !exceeds_max_size(config, &result) {
+                    let _ = sender.send(result);
+                    items_scanned.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -293,6 +318,7 @@ async fn scan_directory_recursive(
             _windows_api,
             junction_detector,
             sender,
+            items_scanned,
         ))
         .await
         {
@@ -371,8 +397,14 @@ async fn try_scan_artifact_dir(
         return None;
     }
 
-    // Aggregate size of the entire subtree
-    let size_bytes = dir_size_sync(path);
+    // Aggregate size of the entire subtree (offloaded to a blocking thread so the
+    // recursive synchronous walk does not stall the async runtime worker).
+    let size_bytes = {
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || dir_size_sync(&path))
+            .await
+            .unwrap_or(0)
+    };
 
     let last_modified = std::fs::metadata(path)
         .ok()
@@ -397,6 +429,18 @@ async fn try_scan_artifact_dir(
         is_safe_to_delete,
         deletion_reason,
     })
+}
+
+/// Return `true` if `result` is an individual file whose size exceeds the
+/// configured `max_file_size`. Aggregated artifact directories are never subject
+/// to this cap (we always want the full subtree size for those).
+fn exceeds_max_size(config: &ScanConfig, result: &ScanResult) -> bool {
+    if result.file_type == FileType::File {
+        if let Some(max) = config.max_file_size {
+            return result.size_bytes > max;
+        }
+    }
+    false
 }
 
 /// Synchronously walk a directory tree and sum file sizes.

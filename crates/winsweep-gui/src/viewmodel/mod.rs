@@ -473,7 +473,8 @@ impl WinSweepViewModel {
                     false,
                     false,
                 );
-                let result = manager.cleanup(items).await?;
+                let scan_id = uuid::Uuid::new_v4();
+                let result = manager.cleanup(scan_id, items).await?;
                 Ok(BackgroundResult::Cleanup(result))
             }));
         }
@@ -604,6 +605,70 @@ impl WinSweepViewModel {
                     Ok(BackgroundResult::DockerPrune(
                         space_freed.map_err(|e| e.to_string()),
                     ))
+                }));
+            }
+        }
+    }
+
+    /// Start a single background task that prunes all Docker resource types in sequence.
+    /// This avoids the "only containers pruned" bug that occurs when calling
+    /// `start_docker_prune_task` four times in a row (subsequent calls are no-ops).
+    pub fn start_docker_prune_all_task(&mut self) {
+        if self.is_operation_running() {
+            return;
+        }
+        if let Some(rt) = self.runtime {
+            if let Some(ref docker_client) = self.docker_client.clone() {
+                self.set_operation_running(true);
+                self.background_task_description = Some("Prune all Docker resources".to_string());
+                let dc = docker_client.clone();
+                self.background_handle = Some(rt.spawn(async move {
+                    let mut total_freed = 0u64;
+
+                    // Containers — stopped only
+                    if let Ok(containers) = dc.get_containers().await {
+                        for c in containers {
+                            if matches!(c.status, winsweep_core::docker::ContainerStatus::Exited)
+                                && dc.remove_container(&c.id, false).await.is_ok()
+                            {
+                                total_freed +=
+                                    c.size_rw.unwrap_or(0) + c.size_root_fs.unwrap_or(0);
+                            }
+                        }
+                    }
+
+                    // Images — dangling only
+                    if let Ok(images) = dc.get_images().await {
+                        for img in images {
+                            if img.dangling && dc.remove_image(&img.id, false).await.is_ok() {
+                                total_freed += img.size;
+                            }
+                        }
+                    }
+
+                    // Volumes — all unused
+                    if let Ok(volumes) = dc.get_volumes().await {
+                        for vol in volumes {
+                            if dc.remove_volume(&vol.name, false).await.is_ok() {
+                                total_freed += vol.size.unwrap_or(0);
+                            }
+                        }
+                    }
+
+                    // Networks — skip built-in bridge/host/none
+                    if let Ok(networks) = dc.get_networks().await {
+                        for net in networks {
+                            if net.name == "bridge"
+                                || net.name == "host"
+                                || net.name == "none"
+                            {
+                                continue;
+                            }
+                            let _ = dc.remove_network(&net.name).await;
+                        }
+                    }
+
+                    Ok(BackgroundResult::DockerPrune(Ok(total_freed)))
                 }));
             }
         }

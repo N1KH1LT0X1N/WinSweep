@@ -16,7 +16,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
       
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
       
     - name: Download artifacts
       uses: actions/download-artifact@v4
@@ -131,7 +131,7 @@ jobs:
       shell: powershell
       
     - name: Upload package
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       with:
         name: winsweep-windows-package
         path: |
@@ -144,7 +144,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
       
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -166,10 +166,15 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
       
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-gnu
+
+    - name: Install MinGW
+      run: choco install mingw -y
       
     - name: Generate documentation
       run: cargo doc --all-features --no-deps

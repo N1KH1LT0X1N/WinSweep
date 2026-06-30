@@ -319,10 +319,15 @@ impl WindowsEditionDetector {
             return Ok(true);
         }
 
-        // Try to run wsl --status
+        // Try to run wsl --status to definitively confirm WSL2
         if which::which("wsl.exe").is_ok() {
-            // In a real implementation, we'd run wsl --status and parse output
-            // For now, assume WSL2 is available if WSL is available and build >= 18362
+            if let Ok(output) = std::process::Command::new("wsl").arg("--status").output() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if text.contains("WSL 2") || text.contains("Default Version: 2") {
+                    return Ok(true);
+                }
+            }
+            // Fall back to build-number heuristic when --status is unavailable
             if let Ok(build) = Self::get_build_number() {
                 return Ok(build >= 18362);
             }

@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Tool detector for checking availability of external tools
@@ -425,11 +425,82 @@ impl ToolDetector {
         Ok(())
     }
 
-    /// Get file version from executable
-    fn get_file_version(&self, _path: &PathBuf) -> Result<Option<String>> {
-        // In a real implementation, this would use Windows APIs to get version info
-        // For now, return None
-        Ok(None)
+    /// Get file version from an executable using the Win32 version-info API.
+    ///
+    /// Returns the four-part file version (`major.minor.build.revision`) read from
+    /// the binary's `VS_FIXEDFILEINFO` resource, or `None` if the file carries no
+    /// version resource.
+    fn get_file_version(&self, path: &Path) -> Result<Option<String>> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::core::PCWSTR;
+            use windows::Win32::Storage::FileSystem::{
+                GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
+            };
+
+            let wide: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+
+            unsafe {
+                let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
+                if size == 0 {
+                    return Ok(None);
+                }
+
+                let mut buffer = vec![0u8; size as usize];
+                GetFileVersionInfoW(
+                    PCWSTR(wide.as_ptr()),
+                    0,
+                    size,
+                    buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                )?;
+
+                let sub_block: Vec<u16> = "\\".encode_utf16().chain(std::iter::once(0)).collect();
+                let mut value_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+                let mut value_len: u32 = 0;
+
+                let ok = VerQueryValueW(
+                    buffer.as_ptr() as *const std::ffi::c_void,
+                    PCWSTR(sub_block.as_ptr()),
+                    &mut value_ptr,
+                    &mut value_len,
+                );
+
+                if !ok.as_bool()
+                    || value_ptr.is_null()
+                    || (value_len as usize) < std::mem::size_of::<VS_FIXEDFILEINFO>()
+                {
+                    return Ok(None);
+                }
+
+                let info = &*(value_ptr as *const VS_FIXEDFILEINFO);
+                // 0xFEEF04BD is the documented VS_FIXEDFILEINFO signature.
+                if info.dwSignature != 0xFEEF_04BD {
+                    return Ok(None);
+                }
+
+                let ms = info.dwFileVersionMS;
+                let ls = info.dwFileVersionLS;
+                let version = format!(
+                    "{}.{}.{}.{}",
+                    (ms >> 16) & 0xffff,
+                    ms & 0xffff,
+                    (ls >> 16) & 0xffff,
+                    ls & 0xffff
+                );
+                Ok(Some(version))
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Ok(None)
+        }
     }
 
     /// Get WSL version
@@ -516,19 +587,47 @@ impl ToolDetector {
         }
     }
 
-    /// Get NuGet version
+    /// Get NuGet version by parsing the banner printed by `nuget help`.
+    ///
+    /// The NuGet CLI prints a first line of the form `NuGet Version: 6.11.0.123`;
+    /// we extract the version token from it.
     fn get_nuget_version(&self) -> Result<Option<String>> {
         use std::process::Command;
 
-        let output = Command::new("nuget").output();
+        let output = Command::new("nuget").arg("help").output();
         match output {
             Ok(result) if result.status.success() => {
-                let _version_str = String::from_utf8_lossy(&result.stdout);
-                // Parse version from output
-                Ok(None) // Simplified for now
+                let banner = String::from_utf8_lossy(&result.stdout);
+                Ok(Self::parse_nuget_version(&banner))
             }
-            _ => Ok(None),
+            _ => {
+                // Fall back to the bare invocation, which also prints the banner.
+                let output = Command::new("nuget").output();
+                match output {
+                    Ok(result) => {
+                        let banner = String::from_utf8_lossy(&result.stdout);
+                        Ok(Self::parse_nuget_version(&banner))
+                    }
+                    _ => Ok(None),
+                }
+            }
         }
+    }
+
+    /// Extract the version token from a NuGet CLI banner.
+    fn parse_nuget_version(banner: &str) -> Option<String> {
+        for line in banner.lines() {
+            let line = line.trim();
+            // Match "NuGet Version: X.Y.Z..." case-insensitively.
+            if let Some(idx) = line.to_lowercase().find("nuget version:") {
+                let rest = line[idx + "nuget version:".len()..].trim();
+                let token = rest.split_whitespace().next()?;
+                if !token.is_empty() {
+                    return Some(token.to_string());
+                }
+            }
+        }
+        None
     }
 
     /// Get Git version
@@ -596,5 +695,38 @@ impl ToolDetector {
 impl Default for ToolDetector {
     fn default() -> Self {
         Self::new().expect("Failed to create ToolDetector")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_nuget_version() {
+        let banner = "NuGet Version: 6.11.0.123\nusage: NuGet <command> [args]";
+        assert_eq!(
+            ToolDetector::parse_nuget_version(banner),
+            Some("6.11.0.123".to_string())
+        );
+        assert_eq!(ToolDetector::parse_nuget_version("no version here"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_get_file_version_for_system_dll() {
+        // kernel32.dll always carries a version resource on Windows.
+        let detector = ToolDetector::new().unwrap();
+        let path = PathBuf::from(r"C:\Windows\System32\kernel32.dll");
+        if path.exists() {
+            let version = detector.get_file_version(&path).unwrap();
+            assert!(
+                version.is_some(),
+                "kernel32.dll should expose a file version"
+            );
+            // Sanity: dotted numeric form.
+            let v = version.unwrap();
+            assert!(v.split('.').count() == 4, "unexpected version form: {v}");
+        }
     }
 }

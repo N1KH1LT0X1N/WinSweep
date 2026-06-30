@@ -176,7 +176,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 # Quick dev-loop check before opening a PR
 cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --workspace     # 105 tests
+cargo test --workspace     # 157 tests
 ```
 
 ### Project Structure
@@ -190,7 +190,7 @@ WinSweep/
 │   ├── winsweep-cli/          TUI + ndjson streaming CLI
 │   └── winsweep-gui/          egui GUI + system tray
 ├── tests/
-│   └── integration_tests.rs   105 total tests
+│   └── integration_tests.rs   157 total tests across the workspace
 ├── installer/
 │   └── winsweep.nsi           NSIS installer script
 └── docs/                      user / developer / api docs

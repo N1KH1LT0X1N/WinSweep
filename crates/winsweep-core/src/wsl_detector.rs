@@ -312,52 +312,51 @@ impl WslDetector {
 
     /// Detect distributions from registry
     fn detect_distributions_from_registry(&mut self) -> Result<()> {
-        // Get default distribution
-        let _default_distro = self
+        const LXSS_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss";
+
+        // Enumerate GUID-named subkeys of HKLM\...\Lxss.  Each one is a distribution.
+        let subkeys = self
             .windows_api
-            .read_registry_string(
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss",
-                "DefaultDistribution",
-            )
-            .ok();
+            .enumerate_registry_subkeys(LXSS_KEY)
+            .unwrap_or_default();
 
-        // Enumerate distribution GUIDs
-        // In a real implementation, we'd enumerate subkeys of Lxss
-        // For now, we'll use common distribution names
+        for subkey in &subkeys {
+            // Skip the top-level values (non-GUID keys are metadata, not distros)
+            if !subkey.starts_with('{') {
+                continue;
+            }
+            let path = format!(r"{}\{}", LXSS_KEY, subkey);
+            // DistributionName is the human-readable name (e.g. "Ubuntu-22.04")
+            if let Ok(name) = self
+                .windows_api
+                .read_registry_string(&path, "DistributionName")
+            {
+                if let Some(distro) = self.detect_single_distribution_from_registry(&name)? {
+                    self.distributions.insert(name, distro);
+                }
+            }
+        }
 
-        let common_distros = [
-            "Ubuntu",
-            "Ubuntu-18.04",
-            "Ubuntu-20.04",
-            "Ubuntu-22.04",
-            "Debian",
-            "kali-linux",
-            "openSUSE-Leap",
-            "SLES",
-            "SLES-12",
-            "SLES-15",
-            "Ubuntu-16.04",
-            "Ubuntu-18.04",
-            "Ubuntu-20.04",
-            "Arch",
-            "CentOS",
-            "CentOS-7",
-            "CentOS-8",
-            "Debian",
-            "Fedora",
-            "Fedora-33",
-            "Fedora-34",
-            "Pengwin",
-            "Pengwin-Enterprise",
-            "RancherOS",
-            "RancherDesktop",
-            "Alpine",
-            "Alpine-3.14",
-        ];
-
-        for distro_name in &common_distros {
-            if let Some(distro) = self.detect_single_distribution_from_registry(distro_name)? {
-                self.distributions.insert(distro_name.to_string(), distro);
+        // Fallback: if enumeration returned nothing (e.g. insufficient privileges),
+        // probe a known list of common distribution names so the detector still works
+        // on machines where the caller lacks ENUMERATE_SUB_KEYS rights.
+        if self.distributions.is_empty() {
+            let common_distros = [
+                "Ubuntu",
+                "Ubuntu-22.04",
+                "Ubuntu-20.04",
+                "Ubuntu-18.04",
+                "Debian",
+                "kali-linux",
+                "openSUSE-Leap",
+                "Alpine",
+                "Fedora",
+                "Arch",
+            ];
+            for distro_name in &common_distros {
+                if let Some(distro) = self.detect_single_distribution_from_registry(distro_name)? {
+                    self.distributions.insert(distro_name.to_string(), distro);
+                }
             }
         }
 

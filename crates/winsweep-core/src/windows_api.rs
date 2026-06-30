@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use tracing::{error, warn};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::GetLastError;
+use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetDiskFreeSpaceExW, GetFileAttributesW, GetFinalPathNameByHandleW,
     SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -21,8 +21,23 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+    RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE,
+    KEY_ENUMERATE_SUB_KEYS, KEY_READ,
 };
+
+/// RAII guard that closes a Windows `HANDLE` on drop, guaranteeing the handle is
+/// released on every exit path (including early returns/errors).
+struct ScopedHandle(HANDLE);
+
+impl Drop for ScopedHandle {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
 
 /// Safe wrapper for Windows API operations
 pub struct WindowsApi;
@@ -67,6 +82,8 @@ impl WindowsApi {
                 FILE_FLAG_BACKUP_SEMANTICS,
                 None,
             )?;
+            // Ensure the handle is closed on every return path below.
+            let _handle_guard = ScopedHandle(handle);
 
             let mut buffer = [0u16; 32768]; // MAX_PATH * 4
             let result = GetFinalPathNameByHandleW(handle, &mut buffer, VOLUME_NAME_DOS);
@@ -235,6 +252,56 @@ impl WindowsApi {
                     Ok(true)
                 }
             }
+        }
+    }
+
+    /// Enumerate the immediate subkey names of a registry key.
+    ///
+    /// Returns an empty `Vec` (not an error) when the key exists but has no subkeys.
+    pub fn enumerate_registry_subkeys(&self, key: &str) -> Result<Vec<String>> {
+        let key_wide = to_wide(key);
+        let mut key_handle = HKEY::default();
+
+        unsafe {
+            RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                PCWSTR(key_wide.as_ptr()),
+                0,
+                KEY_ENUMERATE_SUB_KEYS,
+                &mut key_handle,
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to open registry key '{}': {}", key, e))?;
+
+            let mut subkeys = Vec::new();
+            let mut index = 0u32;
+            loop {
+                // Max subkey name length on Windows is 255 characters + null.
+                let mut name_buf = vec![0u16; 256];
+                let mut name_len = name_buf.len() as u32;
+
+                let result = RegEnumKeyExW(
+                    key_handle,
+                    index,
+                    windows::core::PWSTR(name_buf.as_mut_ptr()),
+                    &mut name_len,
+                    None,
+                    windows::core::PWSTR::null(),
+                    None,
+                    None,
+                );
+
+                if result.is_err() {
+                    // ERROR_NO_MORE_ITEMS terminates the loop cleanly.
+                    break;
+                }
+
+                let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                subkeys.push(name);
+                index += 1;
+            }
+
+            let _ = RegCloseKey(key_handle);
+            Ok(subkeys)
         }
     }
 

@@ -39,7 +39,7 @@ pub async fn check_for_update() -> Result<UpdateStatus> {
         .build()?;
 
     let resp = client
-        .get("https://api.github.com/repos/winsweep/winsweep/releases/latest")
+        .get("https://api.github.com/repos/N1KH1LT0X1N/WinSweep/releases/latest")
         .send()
         .await;
 

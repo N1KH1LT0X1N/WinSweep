@@ -7,6 +7,7 @@ use anyhow::Result;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use windows::core::PCWSTR;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES,
@@ -15,6 +16,20 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::Ioctl::FSCTL_GET_REPARSE_POINT;
 use windows::Win32::System::SystemServices::{IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK};
 use windows::Win32::System::IO::DeviceIoControl;
+
+/// RAII guard that closes a Windows `HANDLE` on drop, guaranteeing the handle is
+/// released on every exit path (including early returns/errors).
+struct ScopedHandle(HANDLE);
+
+impl Drop for ScopedHandle {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
 
 /// Detector for distinguishing between junctions and symlinks
 pub struct JunctionDetector;
@@ -84,6 +99,8 @@ impl JunctionDetector {
             if handle.is_invalid() {
                 return Err(anyhow::anyhow!("Failed to open file for reparse query"));
             }
+            // Ensure the handle is closed on every return path below.
+            let _handle_guard = ScopedHandle(handle);
 
             // Allocate buffer for reparse data
             let mut buffer = vec![0u8; 16384]; // MAXIMUM_REPARSE_DATA_BUFFER_SIZE
@@ -135,6 +152,8 @@ impl JunctionDetector {
             if handle.is_invalid() {
                 return Err(anyhow::anyhow!("Failed to open file for reparse query"));
             }
+            // Ensure the handle is closed on every return path below.
+            let _handle_guard = ScopedHandle(handle);
 
             // Allocate buffer for reparse data
             let mut buffer = vec![0u8; 16384];
@@ -167,6 +186,18 @@ impl JunctionDetector {
                     let path_offset = mount_point_data.SubstituteNameOffset as usize;
                     let path_length = mount_point_data.SubstituteNameLength as usize;
 
+                    // Bounds-check the name region against the data actually returned
+                    // before doing any pointer arithmetic, to defend against corrupt
+                    // or hostile reparse buffers.
+                    let base = (mount_point_data.PathBuffer.as_ptr() as usize)
+                        .saturating_sub(buffer.as_ptr() as usize);
+                    let end = base + path_offset + path_length;
+                    if path_length % 2 != 0 || end > bytes_returned as usize || end > buffer.len() {
+                        return Err(anyhow::anyhow!(
+                            "Reparse buffer bounds check failed (mount point)"
+                        ));
+                    }
+
                     let path_wide = std::slice::from_raw_parts(
                         mount_point_data.PathBuffer.as_ptr().add(path_offset) as *const u16,
                         path_length / 2,
@@ -183,6 +214,16 @@ impl JunctionDetector {
                     let symlink_data = &*(&buffer as *const _ as *const SymbolicLinkReparseBuffer);
                     let path_offset = symlink_data.SubstituteNameOffset as usize;
                     let path_length = symlink_data.SubstituteNameLength as usize;
+
+                    // Bounds-check before pointer arithmetic (see mount-point branch).
+                    let base = (symlink_data.PathBuffer.as_ptr() as usize)
+                        .saturating_sub(buffer.as_ptr() as usize);
+                    let end = base + path_offset + path_length;
+                    if path_length % 2 != 0 || end > bytes_returned as usize || end > buffer.len() {
+                        return Err(anyhow::anyhow!(
+                            "Reparse buffer bounds check failed (symlink)"
+                        ));
+                    }
 
                     let path_wide = std::slice::from_raw_parts(
                         symlink_data.PathBuffer.as_ptr().add(path_offset) as *const u16,

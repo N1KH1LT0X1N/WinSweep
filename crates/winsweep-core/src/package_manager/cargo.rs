@@ -130,14 +130,16 @@ impl PackageManager for CargoManager {
     async fn get_cache_paths(&self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
 
-        // Registry cache
+        // Registry cache — the primary Cargo cache under $CARGO_HOME/registry
         paths.push(self.get_registry_cache_path().await?);
 
-        // Git cache
+        // Git cache — $CARGO_HOME/git
         paths.push(self.get_git_cache_path().await?);
 
-        // Target directories
-        paths.extend(self.get_target_paths().await?);
+        // NOTE: We intentionally do NOT include project-local `target/` directories
+        // here.  Walking up from CWD to find them is unreliable (it may return
+        // WinSweep's own build output), and project targets should be cleaned
+        // through the scanner's artifact-directory detection, not this cleaner.
 
         Ok(paths)
     }
@@ -205,33 +207,11 @@ impl PackageManager for CargoManager {
             }
         }
 
-        // Get current directory to restore later
-        let current_dir = std::env::current_dir()?;
-
-        // Run cargo clean when cargo is available (cleans target/ in the current workspace)
-        if let Ok(cargo_path) = self.get_cargo_path() {
-            let output = Command::new(cargo_path)
-                .args(["clean"])
-                .current_dir(&current_dir)
-                .output()
-                .await;
-
-            match output {
-                Ok(result) => {
-                    if result.status.success() {
-                        debug!("cargo clean completed successfully");
-                    } else {
-                        warn!(
-                            "cargo clean failed: {}",
-                            String::from_utf8_lossy(&result.stderr)
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to run cargo clean: {}", e);
-                }
-            }
-        }
+        // NOTE: We deliberately do NOT run `cargo clean` here. `cargo clean` only
+        // acts on the target directory of whatever crate it is invoked from, which
+        // would be WinSweep's *own* current working directory — an unrelated project.
+        // Deleting that target/ is a foot-gun, so we rely solely on removing the
+        // global registry/git caches under $CARGO_HOME below.
 
         // Clean cache directories manually
         let paths = self.get_cache_paths().await?;
